@@ -24,7 +24,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define RETRO_CONTROL_CONTRACT "0.1.0"
+/* Highest contract the core implements. The server ADVERTISES 0.2.0 only when
+ * the backend provides input injection (inject_key); otherwise it reports
+ * 0.1.0, so a 0.1-only backend stays honest. */
+#define RETRO_CONTROL_CONTRACT "0.2.0"
 
 /* Native framebuffer pixel layout; the server swizzles to PPM RGB. */
 typedef enum {
@@ -39,6 +42,13 @@ typedef struct {
     int height;
     retro_pix_fmt_t fmt;
 } retro_framebuffer_t;
+
+/* Key action for inject_key (0.2). */
+typedef enum {
+    RETRO_KEY_TAP  = 0,   /* press then release */
+    RETRO_KEY_DOWN = 1,   /* press / hold       */
+    RETRO_KEY_UP   = 2    /* release            */
+} retro_key_action_t;
 
 /* The emulator implements these. Any may be NULL: the matching endpoint then
  * returns 501 Not Implemented. */
@@ -60,6 +70,15 @@ typedef struct retro_control_backend {
 
     /* Monotonic completed-frame counter. */
     uint64_t (*get_frame_count)(void);
+
+    /* 0.2: inject a key. is_text=1 => `value` is a character code point;
+     * is_text=0 => `value` is a raw platform key code. `action` is a
+     * retro_key_action_t. Return 1 on success, 0 if unmappable (server -> 400).
+     * NULL => /key returns 501 and the server advertises contract 0.1.0. */
+    int (*inject_key)(int is_text, uint32_t value, int action);
+
+    /* 0.2: soft/cold reset the machine. NULL => /reset returns 501. */
+    void (*reset)(void);
 } retro_control_backend_t;
 
 /* Start the server thread bound to 127.0.0.1:port. Non-blocking; 0 on success,

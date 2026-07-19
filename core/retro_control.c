@@ -45,11 +45,14 @@ static pthread_cond_t  g_cv   = PTHREAD_COND_INITIALIZER;
 static long g_frames_to_run = -1;
 static int  g_step_waiting  = 0;
 
-/* single-slot marshalled request (mem / regs / screenshot) */
-typedef enum { REQ_NONE = 0, REQ_MEM, REQ_REGS, REQ_SHOT } req_t;
+/* single-slot marshalled request (mem / regs / screenshot / key / reset) */
+typedef enum { REQ_NONE = 0, REQ_MEM, REQ_REGS, REQ_SHOT, REQ_KEY, REQ_RESET } req_t;
 static volatile req_t g_req = REQ_NONE;
 static uint32_t g_req_addr, g_req_len;
 static int32_t  g_req_bank;
+static int      g_key_is_text;   /* 1 => g_key_value is a char code point */
+static uint32_t g_key_value;
+static int      g_key_action;    /* retro_key_action_t */
 
 static uint8_t    *g_resp_body  = NULL;
 static size_t      g_resp_len   = 0;
@@ -120,6 +123,33 @@ void retro_control_service(void)
         if (g_be->get_framebuffer) build_ppm();
         else { g_resp_body = NULL; g_resp_len = 0; g_resp_status = 501; }
         break;
+    case REQ_KEY: {
+        const char *json;
+        if (!g_be->inject_key) {
+            json = "{\"error\":\"not implemented\"}"; g_resp_status = 501;
+        } else if (g_be->inject_key(g_key_is_text, g_key_value, g_key_action)) {
+            json = "{\"injected\":true}"; g_resp_status = 200;
+        } else {
+            json = "{\"error\":\"unmapped key\"}"; g_resp_status = 400;
+        }
+        size_t l = strlen(json);
+        uint8_t *b = (uint8_t *)malloc(l + 1);
+        if (b) memcpy(b, json, l + 1);
+        g_resp_body = b; g_resp_len = b ? l : 0;
+        g_resp_ctype = "application/json";
+        break;
+    }
+    case REQ_RESET: {
+        const char *json;
+        if (g_be->reset) { g_be->reset(); json = "{\"reset\":true}"; g_resp_status = 200; }
+        else { json = "{\"error\":\"not implemented\"}"; g_resp_status = 501; }
+        size_t l = strlen(json);
+        uint8_t *b = (uint8_t *)malloc(l + 1);
+        if (b) memcpy(b, json, l + 1);
+        g_resp_body = b; g_resp_len = b ? l : 0;
+        g_resp_ctype = "application/json";
+        break;
+    }
     default: break;
     }
     g_req = REQ_NONE;
@@ -201,6 +231,29 @@ static long query_long(const char *q, const char *key, long def)
     return def;
 }
 
+/* copy the value of query key into out (NUL-terminated, truncated to cap).
+ * Returns 1 if the key was present, 0 otherwise. */
+static int query_str(const char *q, const char *key, char *out, size_t cap)
+{
+    size_t kl = strlen(key);
+    const char *p = q;
+    while (p && *p) {
+        if (!strncmp(p, key, kl) && p[kl] == '=') {
+            const char *v = p + kl + 1;
+            const char *e = strchr(v, '&');
+            size_t n = e ? (size_t)(e - v) : strlen(v);
+            if (n >= cap) n = cap - 1;
+            memcpy(out, v, n);
+            out[n] = 0;
+            return 1;
+        }
+        p = strchr(p, '&');
+        if (p) p++;
+    }
+    if (cap) out[0] = 0;
+    return 0;
+}
+
 /* marshal a read to the emulator thread, wait, send the response. */
 static void do_marshalled(int fd, req_t r)
 {
@@ -223,11 +276,13 @@ static void do_status(int fd)
     long f = g_frames_to_run;
     pthread_mutex_unlock(&g_lock);
     unsigned long long fc = g_be->get_frame_count ? g_be->get_frame_count() : 0;
+    /* Advertise 0.2 only when the backend actually offers input injection. */
+    const char *contract = g_be->inject_key ? "0.2.0" : "0.1.0";
     char buf[320];
     snprintf(buf, sizeof buf,
         "{\"contract\":\"%s\",\"emulator\":\"%s\",\"platform\":\"%s\","
         "\"frame\":%llu,\"paused\":%s,\"running\":true}",
-        RETRO_CONTROL_CONTRACT,
+        contract,
         g_be->emulator ? g_be->emulator : "",
         g_be->platform ? g_be->platform : "",
         fc, (f == 0) ? "true" : "false");
@@ -302,6 +357,28 @@ static void handle_conn(int fd)
     if (!strcmp(target, "/resume")) {
         if (!is_post) { send_json(fd, 405, "{\"error\":\"POST only\"}"); return; }
         do_setrun(fd, -1, 0); return;
+    }
+    if (!strcmp(target, "/key")) {
+        if (!is_post) { send_json(fd, 405, "{\"error\":\"POST only\"}"); return; }
+        char text[8];
+        long code = query_long(query, "code", -1);
+        long down = query_long(query, "down", -1);
+        if (query_str(query, "text", text, sizeof text) && text[0]) {
+            g_key_is_text = 1; g_key_value = (uint32_t)(unsigned char)text[0];
+        } else if (code >= 0) {
+            g_key_is_text = 0; g_key_value = (uint32_t)code;
+        } else {
+            send_json(fd, 400, "{\"error\":\"key needs text= or code=\"}"); return;
+        }
+        g_key_action = (down < 0) ? RETRO_KEY_TAP
+                     : (down != 0) ? RETRO_KEY_DOWN : RETRO_KEY_UP;
+        do_marshalled(fd, REQ_KEY);
+        return;
+    }
+    if (!strcmp(target, "/reset")) {
+        if (!is_post) { send_json(fd, 405, "{\"error\":\"POST only\"}"); return; }
+        do_marshalled(fd, REQ_RESET);
+        return;
     }
     send_json(fd, 404, "{\"error\":\"not found\"}");
 }
