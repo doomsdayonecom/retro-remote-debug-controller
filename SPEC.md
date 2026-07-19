@@ -1,12 +1,14 @@
 # Retro Remote Debug Controller — HTTP Control Contract
 
-**Contract version: 0.1.0** (semver; clients assert on the MAJOR).
+**Contract version: 0.2.0** (semver; clients assert on the MAJOR). 0.2 adds
+input injection (`POST /key`, `POST /reset`); it is purely additive, so 0.1
+clients keep working and servers advertise their level via `/status.contract`.
 
 A minimal, portable HTTP API that a retro-platform emulator exposes so an
 external harness can screenshot the screen, read memory and registers, step the
-machine deterministically, and (later) inject input. The same contract is
-implemented by the forked FAB Agon Emulator, the Neo6502 emulator, and the
-Commander X16 emulator, so **one** pytest harness drives all three ports.
+machine deterministically, and inject input. The same contract is implemented
+by the forked FAB Agon Emulator, the Neo6502 emulator, and the Commander X16
+emulator, so **one** pytest harness drives all three ports.
 
 ## Principles
 
@@ -97,11 +99,22 @@ Halt / free-run. `{ "paused": true|false }`. A machine launched with a
 `--control-pause`-style option SHOULD boot paused so tests are deterministic
 from frame 0.
 
-### `POST /key` / `POST /reset`  *(reserved for 0.2)*
-Input injection. Proposed shape — `POST /key` body
-`{ "code": <keycode>, "down": true|false }` or `{ "text": "..." }`; `/reset`
-performs a cold reset. Not required in 0.1, but reserve the paths. Injection
-plus `/step` is what retires scripted-autoexec input.
+### `POST /key?text=<char> | ?code=<n>  [&down=0|1]`  *(0.2)*
+Inject a key. Query params (like `/mem` and `/step`), no body:
+- `text` — a single character, mapped to the platform's keyboard.
+- `code` — a raw platform key code (e.g. fabgl virtual key on Agon, an SDL/PS2
+  code on others). `text` and `code` are alternatives; provide one.
+- `down` — `1` presses (holds), `0` releases; **omitted taps** (press then
+  release). Holding across `/step` frames is how a program that samples input
+  each frame (e.g. a game) actually sees the key.
+- Response: `{ "injected": true }`. Missing/unmapped key → 400.
+
+Injection plus `/step` retires scripted-autoexec input: press → step → assert →
+release, deterministically.
+
+### `POST /reset`  *(0.2)*
+Soft/cold reset the machine. Response `{ "reset": true }`. The `frame` counter
+MAY reset here (the one case `/status.frame` is allowed to go backwards).
 
 ## Consistency (normative)
 
@@ -156,6 +169,10 @@ plus `/step` is what retires scripted-autoexec input.
   ```
 - Framebuffer: from `vgabuf` (the VDP output); the offscreen path already keeps
   video alive (the FAB equivalent of x16's `SDL_VIDEODRIVER=dummy`).
+- Input: `/key?text=c` maps the char to a fabgl virtual key (`ascii2vk`) and
+  delivers it via `sendVKeyEventToFabgl`; `?code=<vk>` passes a raw fabgl vkey.
+  The control thread queues events; the render thread delivers them (same
+  thread as normal keyboard input). `/reset` triggers the soft-reset atomic.
 
 ---
 

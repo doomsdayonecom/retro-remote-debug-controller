@@ -109,6 +109,27 @@ class EmuControl:
     def resume(self) -> None:
         self._post("/resume")
 
+    def key(self, text: str | None = None, code: int | None = None,
+            down: bool | None = None) -> None:
+        """Inject a key (contract 0.2). Provide `text` (a single character) or
+        `code` (a raw platform key code). down=True presses/holds, False
+        releases, None taps (press then release). Hold across step() frames for
+        a program that samples input each frame."""
+        parts = []
+        if text is not None:
+            parts.append(f"text={text}")
+        if code is not None:
+            parts.append(f"code={code}")
+        if down is not None:
+            parts.append(f"down={1 if down else 0}")
+        if not parts:
+            raise EmuControlError("key() needs text= or code=")
+        self._post("/key?" + "&".join(parts))
+
+    def reset(self) -> None:
+        """Soft/cold reset the machine (contract 0.2)."""
+        self._post("/reset")
+
     def screenshot_ppm(self) -> bytes:
         """Return the live screen as raw PPM (P6) bytes. Stdlib-only."""
         body, _ = self._get("/screenshot")

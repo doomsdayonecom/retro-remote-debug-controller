@@ -4,6 +4,8 @@ exercised but banking is not required."""
 import urllib.error
 import urllib.request
 
+import pytest
+
 from emu_control import parse_ppm_header
 
 
@@ -82,3 +84,40 @@ def test_unknown_path_404(emu):
 def test_step_requires_post(emu):
     code, _ = _raw(emu, "GET", "/step?frames=1")
     assert code == 405
+
+
+def _contract_minor(emu) -> int:
+    return int(str(emu.status()["contract"]).split(".")[1])
+
+
+# -- contract 0.2: input injection (skipped on 0.1 servers) ------------------
+
+def test_key_injection(emu):
+    """/key accepts text= and code= with an optional down=, and rejects a
+    request with neither. The key's *effect* is platform/program-specific and
+    tested per-port; here we assert only the contract surface."""
+    if _contract_minor(emu) < 2:
+        pytest.skip("contract < 0.2 (no input injection)")
+    emu.key(text="a", down=True)
+    emu.key(text="a", down=False)
+    emu.key(text="a")                    # tap (press then release)
+    emu.key(code=32, down=True)
+    emu.key(code=32, down=False)
+    code, _ = _raw(emu, "POST", "/key")  # neither text nor code
+    assert code == 400
+
+
+def test_key_requires_post(emu):
+    if _contract_minor(emu) < 2:
+        pytest.skip("contract < 0.2")
+    code, _ = _raw(emu, "GET", "/key?text=a")
+    assert code == 405
+
+
+def test_reset(emu):
+    """/reset responds and is POST-only. Runs last (it restarts the machine)."""
+    if _contract_minor(emu) < 2:
+        pytest.skip("contract < 0.2")
+    code, _ = _raw(emu, "GET", "/reset")
+    assert code == 405
+    emu.reset()
