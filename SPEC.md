@@ -144,19 +144,39 @@ plus `/step` is what retires scripted-autoexec input.
 - Framebuffer: native resolution per the emulator's video mode.
 
 ### Agon (Console8 / Light 2) — FAB Agon Emulator
+- **Adoption:** conform-only (Rust emulator — keeps its own HTTP server, matches
+  this contract rather than vendoring the C core).
 - Flag: `--control-port <N>`.
 - Address space: eZ80 24-bit, flat 16 MB (`addr` up to `0xFFFFFF`); `bank`
-  ignored. Program load base `0x040000`.
-- Registers (ADL): `af bc de hl ix iy sp pc mbase` + ADL-mode flag.
-- Framebuffer: from `vgabuf` (the VDP output), server swizzles to PPM RGB.
+  tolerated and ignored. Program load base `0x040000`.
+- Registers (ADL) — `/regs` example (16-bit regs; `mbase` 8-bit; `adl` 0/1):
+  ```json
+  { "af":0, "bc":0, "de":0, "hl":0, "ix":0, "iy":0,
+    "sp":0, "pc":262144, "mbase":0, "adl":1 }
+  ```
+- Framebuffer: from `vgabuf` (the VDP output); the offscreen path already keeps
+  video alive (the FAB equivalent of x16's `SDL_VIDEODRIVER=dummy`).
 
 ---
 
-## Reference implementations in this repo
+## Adoption paths
 
-- `core/retro_control.h` — the portable backend vtable each fork implements.
-- `core/retro_control.c` — the shared server (socket loop, HTTP parse, PPM/JSON
-  encode, command marshalling). Forks vendor/submodule this and call
-  `retro_control_start(port, &backend)`. *(server .c lands next.)*
+An emulator conforms by exposing exactly the HTTP surface above — nothing else
+is required. Two ways to get there:
+
+- **Vendor the shared core** (`core/retro_control.c` + `.h`) — for C/C++
+  emulators. Implement the four backend callbacks, wire three loop hooks, call
+  `retro_control_start(port, &backend)`; the socket loop, HTTP parsing, PPM/JSON
+  encoding and pause/step control come for free. The Commander X16 fork does this.
+- **Conform directly** — for emulators in other languages (the FAB Agon emulator
+  is Rust). Keep your own HTTP server; just match the contract and pass the
+  conformance suite. Sharing the C core is an optimization, not a requirement —
+  the contract is the asset.
+
+Either way, `conformance/` is the arbiter: pass it and you conform.
+
+## In this repo
+
+- `core/retro_control.{c,h}` — portable server + backend vtable (vendor path).
 - `client/emu_control.py` — the shared pytest client.
-- `conformance/` — tests an emulator runs to prove it conforms. *(next.)*
+- `conformance/` — a platform-agnostic pytest that proves an emulator conforms.
