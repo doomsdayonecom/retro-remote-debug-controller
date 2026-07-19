@@ -29,6 +29,29 @@ class EmuControlError(RuntimeError):
     pass
 
 
+def parse_ppm_header(data: bytes):
+    """Parse a binary PPM (P6) header. Returns (width, height, maxval, offset)
+    where offset is the index of the first pixel byte. Raises on malformed
+    input. Stdlib-only — no Pillow needed."""
+    if data[:2] != b"P6":
+        raise EmuControlError(f"not a P6 PPM (magic {data[:2]!r})")
+    fields, i, n = [], 2, len(data)
+    while len(fields) < 3 and i < n:
+        while i < n and data[i:i + 1].isspace():
+            i += 1
+        if i < n and data[i:i + 1] == b"#":            # comment to end of line
+            while i < n and data[i:i + 1] not in (b"\n", b"\r"):
+                i += 1
+            continue
+        start = i
+        while i < n and not data[i:i + 1].isspace():
+            i += 1
+        fields.append(int(data[start:i]))
+    if len(fields) < 3:
+        raise EmuControlError("truncated PPM header")
+    return fields[0], fields[1], fields[2], i + 1        # +1: single whitespace
+
+
 class EmuControl:
     def __init__(self, port: int, host: str = "127.0.0.1", timeout: float = 5.0):
         self.base = f"http://{host}:{port}"
@@ -86,9 +109,14 @@ class EmuControl:
     def resume(self) -> None:
         self._post("/resume")
 
+    def screenshot_ppm(self) -> bytes:
+        """Return the live screen as raw PPM (P6) bytes. Stdlib-only."""
+        body, _ = self._get("/screenshot")
+        return body
+
     def screenshot(self):
         """Return the live screen as a PIL.Image (requires Pillow)."""
-        body, ctype = self._get("/screenshot")
+        body = self.screenshot_ppm()
         try:
             from PIL import Image
         except ImportError as e:  # pragma: no cover
