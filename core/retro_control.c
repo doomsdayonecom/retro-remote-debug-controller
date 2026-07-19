@@ -22,6 +22,7 @@ void retro_control_stop(void) {}
 #else
 
 #include <pthread.h>
+#include <stdatomic.h>
 #include <unistd.h>
 #include <errno.h>
 #include <signal.h>
@@ -42,8 +43,10 @@ static pthread_t g_thread;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  g_cv   = PTHREAD_COND_INITIALIZER;
 
-/* run control: -1 free-run, 0 halted, >0 run this many frames then halt */
-static long g_frames_to_run = -1;
+/* run control: -1 free-run, 0 halted, >0 run this many frames then halt.
+ * Atomic so retro_control_running() (called every instruction) reads it without
+ * taking the lock — the mutex is kept only for the /step completion handshake. */
+static _Atomic long g_frames_to_run = -1;
 static int  g_step_waiting  = 0;
 
 /* single-slot marshalled request (mem / regs / screenshot / key / reset) */
@@ -162,10 +165,10 @@ void retro_control_service(void)
 int retro_control_running(void)
 {
     if (!g_be) return 1;
-    pthread_mutex_lock(&g_lock);
-    long f = g_frames_to_run;
-    pthread_mutex_unlock(&g_lock);
-    return f != 0;
+    /* Lock-free hot path: a word-sized atomic read, no mutex. The gate
+     * tolerates a one-iteration-stale value; /step correctness is enforced by
+     * the mutex + condvar in on_frame/do_step, not by this read. */
+    return atomic_load_explicit(&g_frames_to_run, memory_order_relaxed) != 0;
 }
 
 void retro_control_on_frame(void)
