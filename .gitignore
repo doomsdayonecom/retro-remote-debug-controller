@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# C build artifacts
+*.o
+*.a
+*.so
+build/
+
+# editor/OS
+*.swp
+.DS_Store
