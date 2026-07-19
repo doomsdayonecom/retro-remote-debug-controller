@@ -11,8 +11,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(_WIN32)
-/* No server on Windows for now — stub out so the fork still builds. */
+#if defined(_WIN32) || defined(__EMSCRIPTEN__)
+/* No TCP control server on Windows or in the browser (emscripten) — a localhost
+ * socket server has no meaning there. Stub out so those builds still link. */
 int  retro_control_start(int port, const retro_control_backend_t *b) { (void)port; (void)b; return -1; }
 void retro_control_service(void) {}
 int  retro_control_running(void) { return 1; }
