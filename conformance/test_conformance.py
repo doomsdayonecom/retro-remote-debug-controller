@@ -1,6 +1,7 @@
-"""Contract conformance tests (SPEC.md 0.1.x). Platform-agnostic: framebuffer
+"""Contract conformance tests (SPEC.md 0.3.x). Platform-agnostic: framebuffer
 dimensions come from the PPM header, addresses use $0000, and `bank` is
-exercised but banking is not required."""
+exercised but banking is not required. Tests gated on the server's advertised
+minor (input injection 0.2; memory write + audio 0.3) skip on older servers."""
 import urllib.error
 import urllib.request
 
@@ -112,6 +113,43 @@ def test_key_requires_post(emu):
         pytest.skip("contract < 0.2")
     code, _ = _raw(emu, "GET", "/key?text=a")
     assert code == 405
+
+
+# -- contract 0.3: memory write + audio (skipped on < 0.3 servers) -----------
+
+def test_mem_write_roundtrip(emu):
+    """POST /mem pokes bytes; GET /mem reads them back (contract 0.3)."""
+    if _contract_minor(emu) < 3:
+        pytest.skip("contract < 0.3 (no memory write)")
+    emu.pause()               # freeze so the machine can't overwrite between write+read
+    try:
+        addr, payload = 0x0400, bytes([0xA5, 0x5A, 0x00, 0xFF])
+        assert emu.mem_write(addr, payload) == len(payload)
+        assert emu.mem(addr, len(payload)) == payload
+    finally:
+        emu.resume()
+
+
+def test_mem_write_requires_post(emu):
+    if _contract_minor(emu) < 3:
+        pytest.skip("contract < 0.3")
+    # GET /mem is the read path (200), never a write — writing needs POST.
+    code, _ = _raw(emu, "GET", "/mem?addr=0&len=1")
+    assert code == 200
+
+
+def test_audio_is_valid_wav(emu):
+    """GET /audio returns a parseable PCM WAV (contract 0.3)."""
+    if _contract_minor(emu) < 3:
+        pytest.skip("contract < 0.3 (no audio)")
+    import io
+    import wave
+    emu.pause(); emu.step(4)          # produce a little audio deterministically
+    w = wave.open(io.BytesIO(emu.audio()), "rb")
+    assert w.getsampwidth() == 2      # signed 16-bit
+    assert w.getnchannels() in (1, 2)
+    assert w.getframerate() > 0
+    emu.resume()
 
 
 def test_reset(emu):

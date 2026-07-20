@@ -1,7 +1,7 @@
 """emu_control.py — shared client for the Retro Remote Debug Controller.
 
 One client for every port's pytest suite. Speaks the HTTP contract in
-../SPEC.md (0.1.x). Depends only on the stdlib; Pillow is optional and only
+../SPEC.md (0.3.x). Depends only on the stdlib; Pillow is optional and only
 needed for .screenshot().
 
     from emu_control import EmuControl
@@ -65,8 +65,8 @@ class EmuControl:
         except urllib.error.HTTPError as e:
             raise EmuControlError(f"GET {path} -> {e.code}: {e.read()!r}") from e
 
-    def _post(self, path: str) -> bytes:
-        req = urllib.request.Request(self.base + path, method="POST", data=b"")
+    def _post(self, path: str, body: bytes = b"") -> bytes:
+        req = urllib.request.Request(self.base + path, method="POST", data=body)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
                 return r.read()
@@ -129,6 +129,19 @@ class EmuControl:
     def reset(self) -> None:
         """Soft/cold reset the machine (contract 0.2)."""
         self._post("/reset")
+
+    def mem_write(self, addr: int, data: bytes, bank: int | None = None) -> int:
+        """Write/poke bytes at addr (contract 0.3). Returns the number written."""
+        path = f"/mem?addr={addr}"
+        if bank is not None:
+            path += f"&bank={bank}"
+        return int(json.loads(self._post(path, bytes(data)))["written"])
+
+    def audio(self) -> bytes:
+        """Raw WAV (PCM) of audio synthesized since the last call (contract 0.3).
+        Drain regularly (e.g. after each step) so the ring doesn't overflow."""
+        body, _ = self._get("/audio")
+        return body
 
     def screenshot_ppm(self) -> bytes:
         """Return the live screen as raw PPM (P6) bytes. Stdlib-only."""

@@ -49,14 +49,17 @@ static pthread_cond_t  g_cv   = PTHREAD_COND_INITIALIZER;
 static _Atomic long g_frames_to_run = -1;
 static int  g_step_waiting  = 0;
 
-/* single-slot marshalled request (mem / regs / screenshot / key / reset) */
-typedef enum { REQ_NONE = 0, REQ_MEM, REQ_REGS, REQ_SHOT, REQ_KEY, REQ_RESET } req_t;
+/* single-slot marshalled request. */
+typedef enum { REQ_NONE = 0, REQ_MEM, REQ_REGS, REQ_SHOT, REQ_KEY, REQ_RESET,
+               REQ_WRITE, REQ_AUDIO } req_t;
 static volatile req_t g_req = REQ_NONE;
 static uint32_t g_req_addr, g_req_len;
 static int32_t  g_req_bank;
+static const uint8_t *g_write_data;   /* POST /mem body (HTTP-thread owned) */
 static int      g_key_is_text;   /* 1 => g_key_value is a char code point */
 static uint32_t g_key_value;
 static int      g_key_action;    /* retro_key_action_t */
+static char     g_resp_extra[64];     /* extra response header line, or "" */
 
 static uint8_t    *g_resp_body  = NULL;
 static size_t      g_resp_len   = 0;
@@ -98,11 +101,49 @@ static void build_ppm(void)
     g_resp_ctype = "image/x-portable-pixmap";
 }
 
+#define AUDIO_MAX_SAMPLES (1u << 18)   /* drain cap: 256K int16 (~2.7 s stereo @48.8k) */
+
+static void le16(uint8_t *p, uint16_t v) { p[0] = v; p[1] = v >> 8; }
+static void le32(uint8_t *p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; }
+
+/* Drain the backend's audio ring and wrap it as a canonical PCM WAV. */
+static void build_wav(void)
+{
+    static int16_t samp[AUDIO_MAX_SAMPLES];
+    int rate = 48000, channels = 1;
+    uint32_t dropped = 0;
+    uint32_t n = g_be->capture_audio(samp, AUDIO_MAX_SAMPLES, &rate, &channels, &dropped);
+    if (channels < 1) channels = 1;
+    if (rate < 1) rate = 1;
+
+    uint32_t data_bytes = n * 2;               /* int16 samples */
+    uint32_t total = 44 + data_bytes;
+    uint8_t *out = (uint8_t *)malloc(total);
+    if (!out) { g_resp_body = NULL; g_resp_len = 0; g_resp_status = 500; return; }
+
+    uint32_t byte_rate = (uint32_t)rate * channels * 2;
+    memcpy(out, "RIFF", 4);       le32(out + 4, 36 + data_bytes);
+    memcpy(out + 8, "WAVE", 4);
+    memcpy(out + 12, "fmt ", 4);  le32(out + 16, 16);
+    le16(out + 20, 1);            le16(out + 22, (uint16_t)channels);
+    le32(out + 24, (uint32_t)rate);
+    le32(out + 28, byte_rate);    le16(out + 32, (uint16_t)(channels * 2));
+    le16(out + 34, 16);
+    memcpy(out + 36, "data", 4);  le32(out + 40, data_bytes);
+    memcpy(out + 44, samp, data_bytes);
+
+    g_resp_body = out; g_resp_len = total; g_resp_status = 200;
+    g_resp_ctype = "audio/wav";
+    snprintf(g_resp_extra, sizeof g_resp_extra,
+             "X-Rrdc-Audio-Dropped: %u\r\n", (unsigned)dropped);
+}
+
 void retro_control_service(void)
 {
     if (!g_be || g_req == REQ_NONE) return;   /* cheap unlocked fast-path */
 
     pthread_mutex_lock(&g_lock);
+    g_resp_extra[0] = 0;
     switch (g_req) {
     case REQ_MEM: {
         uint32_t len = g_req_len > MEM_CAP ? MEM_CAP : g_req_len;
@@ -154,6 +195,33 @@ void retro_control_service(void)
         g_resp_ctype = "application/json";
         break;
     }
+    case REQ_WRITE: {
+        const char *json; char *b;
+        if (!g_be->write_mem) {
+            json = "{\"error\":\"not implemented\"}"; g_resp_status = 501;
+            size_t l = strlen(json); b = (char *)malloc(l + 1);
+            if (b) memcpy(b, json, l + 1);
+            g_resp_len = b ? l : 0;
+        } else {
+            uint32_t wrote = g_be->write_mem(g_req_addr, g_req_bank, g_req_len, g_write_data);
+            b = (char *)malloc(48);
+            g_resp_len = b ? (size_t)snprintf(b, 48, "{\"written\":%u}", (unsigned)wrote) : 0;
+            g_resp_status = 200;
+        }
+        g_resp_body = (uint8_t *)b;
+        g_resp_ctype = "application/json";
+        break;
+    }
+    case REQ_AUDIO:
+        if (g_be->capture_audio) build_wav();
+        else {
+            const char *json = "{\"error\":\"not implemented\"}";
+            size_t l = strlen(json); uint8_t *b = (uint8_t *)malloc(l + 1);
+            if (b) memcpy(b, json, l + 1);
+            g_resp_body = b; g_resp_len = b ? l : 0; g_resp_status = 501;
+            g_resp_ctype = "application/json";
+        }
+        break;
     default: break;
     }
     g_req = REQ_NONE;
@@ -198,8 +266,9 @@ static void write_all(int fd, const void *buf, size_t len)
     }
 }
 
+/* `extra`, if non-NULL, is a complete header line ("Name: value\r\n"). */
 static void send_http(int fd, int status, const char *ctype,
-                      const uint8_t *body, size_t len)
+                      const uint8_t *body, size_t len, const char *extra)
 {
     const char *reason =
         status == 200 ? "OK" :
@@ -207,18 +276,18 @@ static void send_http(int fd, int status, const char *ctype,
         status == 404 ? "Not Found" :
         status == 405 ? "Method Not Allowed" :
         status == 501 ? "Not Implemented" : "Error";
-    char hdr[256];
+    char hdr[320];
     int hl = snprintf(hdr, sizeof hdr,
         "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\n"
-        "Connection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
-        status, reason, ctype, len);
+        "Connection: close\r\nAccess-Control-Allow-Origin: *\r\n%s\r\n",
+        status, reason, ctype, len, extra ? extra : "");
     write_all(fd, hdr, hl);
     if (body && len) write_all(fd, body, len);
 }
 
 static void send_json(int fd, int status, const char *json)
 {
-    send_http(fd, status, "application/json", (const uint8_t *)json, strlen(json));
+    send_http(fd, status, "application/json", (const uint8_t *)json, strlen(json), NULL);
 }
 
 /* value of query key, decimal or 0x-hex (strtol base 0); def if absent. */
@@ -267,10 +336,11 @@ static void do_marshalled(int fd, req_t r)
     while (!g_resp_ready) pthread_cond_wait(&g_cv, &g_lock);
     uint8_t *body = g_resp_body; size_t len = g_resp_len;
     int st = g_resp_status; const char *ct = g_resp_ctype;
+    char extra[64]; memcpy(extra, g_resp_extra, sizeof extra);
     g_resp_body = NULL;
     pthread_mutex_unlock(&g_lock);
 
-    send_http(fd, st, ct, body, len);
+    send_http(fd, st, ct, body, len, extra[0] ? extra : NULL);
     free(body);
 }
 
@@ -280,8 +350,10 @@ static void do_status(int fd)
     long f = g_frames_to_run;
     pthread_mutex_unlock(&g_lock);
     unsigned long long fc = g_be->get_frame_count ? g_be->get_frame_count() : 0;
-    /* Advertise 0.2 only when the backend actually offers input injection. */
-    const char *contract = g_be->inject_key ? "0.2.0" : "0.1.0";
+    /* Advertise the highest level whose defining callbacks are all present. */
+    const char *contract =
+        (g_be->inject_key && g_be->write_mem && g_be->capture_audio) ? "0.3.0" :
+        g_be->inject_key ? "0.2.0" : "0.1.0";
     char buf[320];
     snprintf(buf, sizeof buf,
         "{\"contract\":\"%s\",\"emulator\":\"%s\",\"platform\":\"%s\","
@@ -318,6 +390,39 @@ static void do_setrun(int fd, long v, int paused)
     send_json(fd, 200, paused ? "{\"paused\":true}" : "{\"paused\":false}");
 }
 
+/* Read a request body (POST /mem). `req`/`n` = what handle_conn already recv'd
+ * (headers + maybe some body); reads the rest per Content-Length. Returns a
+ * malloc'd buffer of *out_len bytes (caller frees), capped at MEM_CAP. */
+static uint8_t *read_body(int fd, char *req, size_t n, size_t *out_len)
+{
+    *out_len = 0;
+    char *hdr_end = strstr(req, "\r\n\r\n");
+    if (!hdr_end) return NULL;
+    char *body_start = hdr_end + 4;
+
+    long clen = 0;
+    char *cl = strstr(req, "Content-Length:");
+    if (!cl) cl = strstr(req, "content-length:");
+    if (cl) clen = strtol(cl + 15, NULL, 10);
+    if (clen < 0) clen = 0;
+    if (clen > (long)MEM_CAP) clen = (long)MEM_CAP;
+
+    uint8_t *body = (uint8_t *)malloc((size_t)clen ? (size_t)clen : 1);
+    if (!body) return NULL;
+
+    size_t have = (size_t)(req + n - body_start);
+    if (have > (size_t)clen) have = (size_t)clen;
+    memcpy(body, body_start, have);
+    size_t got = have;
+    while (got < (size_t)clen) {
+        ssize_t r = recv(fd, body + got, (size_t)clen - got, 0);
+        if (r <= 0) break;
+        got += (size_t)r;
+    }
+    *out_len = got;
+    return body;
+}
+
 static void handle_conn(int fd)
 {
     char req[2048];
@@ -343,11 +448,21 @@ static void handle_conn(int fd)
     if (!strcmp(target, "/status"))          { do_status(fd); return; }
     if (!strcmp(target, "/regs"))            { do_marshalled(fd, REQ_REGS); return; }
     if (!strcmp(target, "/screenshot"))      { do_marshalled(fd, REQ_SHOT); return; }
+    if (!strcmp(target, "/audio"))           { do_marshalled(fd, REQ_AUDIO); return; }
     if (!strcmp(target, "/mem")) {
         g_req_addr = (uint32_t)query_long(query, "addr", 0);
-        g_req_len  = (uint32_t)query_long(query, "len", 0);
         g_req_bank = (int32_t)query_long(query, "bank", -1);
-        do_marshalled(fd, REQ_MEM);
+        if (is_post) {                        /* 0.3: write / poke */
+            size_t blen = 0;
+            uint8_t *body = read_body(fd, req, n, &blen);
+            g_req_len = (uint32_t)blen;
+            g_write_data = body;
+            do_marshalled(fd, REQ_WRITE);
+            free(body);
+        } else {                              /* read */
+            g_req_len = (uint32_t)query_long(query, "len", 0);
+            do_marshalled(fd, REQ_MEM);
+        }
         return;
     }
     if (!strcmp(target, "/step")) {

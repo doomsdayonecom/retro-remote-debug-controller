@@ -24,10 +24,11 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/* Highest contract the core implements. The server ADVERTISES 0.2.0 only when
- * the backend provides input injection (inject_key); otherwise it reports
- * 0.1.0, so a 0.1-only backend stays honest. */
-#define RETRO_CONTROL_CONTRACT "0.2.0"
+/* Highest contract the core implements. The server advertises the highest level
+ * whose backend callbacks are all present: 0.3.0 needs inject_key + write_mem +
+ * capture_audio; 0.2.0 needs inject_key; else 0.1.0. Keeps a partial backend
+ * honest. */
+#define RETRO_CONTROL_CONTRACT "0.3.0"
 
 /* Native framebuffer pixel layout; the server swizzles to PPM RGB. */
 typedef enum {
@@ -79,6 +80,19 @@ typedef struct retro_control_backend {
 
     /* 0.2: soft/cold reset the machine. NULL => /reset returns 501. */
     void (*reset)(void);
+
+    /* 0.3: write len bytes from `in` at addr (debug/state poke; bank<0 =
+     * current). Intended for RAM/state — I/O-register writes may trigger device
+     * side effects. Return bytes written. NULL => POST /mem returns 501. */
+    uint32_t (*write_mem)(uint32_t addr, int32_t bank, uint32_t len,
+                          const uint8_t *in);
+
+    /* 0.3: drain up to `cap` interleaved signed-16-bit audio samples the
+     * emulator has synthesised since the last call into `out`; set *rate and
+     * *channels; set *dropped to samples lost to overflow since the last drain.
+     * Return the number of int16 samples written. NULL => /audio returns 501. */
+    uint32_t (*capture_audio)(int16_t *out, uint32_t cap,
+                              int *rate, int *channels, uint32_t *dropped);
 } retro_control_backend_t;
 
 /* Start the server thread bound to 127.0.0.1:port. Non-blocking; 0 on success,

@@ -1,8 +1,10 @@
 # Retro Remote Debug Controller — HTTP Control Contract
 
-**Contract version: 0.2.0** (semver; clients assert on the MAJOR). 0.2 adds
-input injection (`POST /key`, `POST /reset`); it is purely additive, so 0.1
-clients keep working and servers advertise their level via `/status.contract`.
+**Contract version: 0.3.0** (semver; clients assert on the MAJOR). 0.3 adds
+memory write (`POST /mem`) and an audio drain (`GET /audio`); 0.2 added input
+injection (`POST /key`, `POST /reset`). Every minor is purely additive, so older
+clients keep working and servers advertise the highest level whose callbacks are
+all present via `/status.contract`.
 
 A minimal, portable HTTP API that a retro-platform emulator exposes so an
 external harness can screenshot the screen, read memory and registers, step the
@@ -41,7 +43,7 @@ emulator, so **one** pytest harness drives all three ports.
 Liveness + contract negotiation. Always available.
 ```json
 {
-  "contract": "0.1.0",
+  "contract": "0.3.0",
   "emulator": "x16emu",
   "platform": "x16",
   "frame": 12345,
@@ -78,6 +80,21 @@ Raw memory bytes.
 - Response: `application/octet-stream`, exactly the requested bytes.
 - Reads go through the emulator's debug-read path (no side effects, no I/O
   triggers, no access-flag mutation).
+
+### `POST /mem?addr=<a>[&bank=<b>]`  *(0.3)*
+Write (poke) memory. The write-sibling of `GET /mem`; same address/bank model.
+- `addr`, `bank` — as for the read form. `len` is NOT a query param: the byte
+  count is the request **body** length.
+- Body — `application/octet-stream`, the raw bytes to write starting at `addr`.
+  Servers MAY cap the body (recommend ≥ 65536).
+- Response: `{ "written": <n> }` — bytes actually written. A server MAY write
+  fewer than requested (e.g. it stops at a ROM/unwritable boundary); the count
+  tells the truth.
+- Writes go through the emulator's CPU write path. Intended for RAM/state
+  fixup (force lives, seed a level, restore a snapshot). Writing an I/O register
+  MAY trigger device side effects — that is the caller's responsibility.
+- Determinism: poke while `paused` so the machine can't overwrite between the
+  write and a subsequent read.
 
 ### `GET /regs`
 CPU registers as JSON. Keys are platform-specific (appendix); values are decimal
@@ -116,6 +133,22 @@ release, deterministically.
 Soft/cold reset the machine. Response `{ "reset": true }`. The `frame` counter
 MAY reset here (the one case `/status.frame` is allowed to go backwards).
 
+### `GET /audio`  *(0.3)*
+Drain the audio the emulator has synthesised since the last `/audio` call — the
+audio analogue of `/screenshot`, but a *window* (everything since last drain)
+rather than a snapshot.
+- Response: `audio/wav`, a self-describing **PCM WAV** (RIFF, 16-bit signed,
+  interleaved). The header carries the sample rate and channel count; clients
+  read them from the WAV — do not hardcode (appendix lists native rates).
+- The server keeps a bounded ring of mixed output samples, teed from the same
+  buffer that feeds the sound device. Each call empties the ring and returns it;
+  an empty ring returns a valid zero-frame WAV.
+- Determinism: under `/pause` + `/step`, the drain covers exactly the audio of
+  the stepped frames, so a test can `pause → step(n) → GET /audio` and get the
+  sound of those `n` frames reproducibly.
+- `X-Rrdc-Audio-Dropped: <n>` — samples the ring dropped (oldest-first) to
+  overflow since the last drain. Non-zero means drain more often. `0` when clean.
+
 ## Consistency (normative)
 
 - `/mem`, `/regs`, and `/step` MUST be serviced on the emulator thread at an
@@ -149,6 +182,8 @@ MAY reset here (the one case `/status.frame` is allowed to go backwards).
 - Registers: `a x y` (8), `sp pc` (16), `status` (8), plus `ram_bank`,
   `rom_bank`. Source: the `regs` struct + `memory_get_ram_bank/rom_bank()`.
 - Frame source: `video.c` `frame_count`.
+- Audio: stereo (2 ch), native rate `25000000/512` ≈ **48828 Hz**, teed from the
+  mixed `audio_render()` output.
 
 ### Neo6502 — neo6502 emulator
 - Flag: `--control-port <N>`.
@@ -182,9 +217,12 @@ An emulator conforms by exposing exactly the HTTP surface above — nothing else
 is required. Two ways to get there:
 
 - **Vendor the shared core** (`core/retro_control.c` + `.h`) — for C/C++
-  emulators. Implement the four backend callbacks, wire three loop hooks, call
-  `retro_control_start(port, &backend)`; the socket loop, HTTP parsing, PPM/JSON
-  encoding and pause/step control come for free. The Commander X16 fork does this.
+  emulators. Implement the backend callbacks (four are enough for 0.1; add
+  `inject_key`/`reset` for 0.2 and `write_mem`/`capture_audio` for 0.3 — a NULL
+  callback makes its endpoint return 501 and lowers the advertised contract),
+  wire three loop hooks, call `retro_control_start(port, &backend)`; the socket
+  loop, HTTP parsing, PPM/JSON encoding and pause/step control come for free.
+  The Commander X16 fork does this.
 - **Conform directly** — for emulators in other languages (the FAB Agon emulator
   is Rust). Keep your own HTTP server; just match the contract and pass the
   conformance suite. Sharing the C core is an optimization, not a requirement —
