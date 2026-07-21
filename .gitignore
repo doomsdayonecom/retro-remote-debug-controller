@@ -9,6 +9,10 @@ __pycache__/
 *.a
 *.so
 build/
+# automake in-tree artifacts (when a consumer compiles core/ where it sits,
+# e.g. the mednafen fork vendoring this as a submodule)
+.deps/
+.dirstamp
 
 # editor/OS
 *.swp
