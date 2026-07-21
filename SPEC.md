@@ -209,6 +209,28 @@ rather than a snapshot.
   The control thread queues events; the render thread delivers them (same
   thread as normal keyboard input). `/reset` triggers the soft-reset atomic.
 
+### NEC PC-FX — `mednafen` (Doomsday One fork)
+- **Adoption:** vendors the shared core as a git submodule
+  (`src/extern/retro-remote-debug-controller`), built in with `./configure
+  --enable-rrdc`. Dispatched per running console, so PC Engine and Saturn can
+  reuse the same core once their backends land.
+- Control port: the `MEDNAFEN_CONTROLPORT=<N>` environment variable (Mednafen
+  exposes no free-form CLI flag for a driver add-on). Unset ⇒ server off.
+- Address space: V810, flat **2 MB** main RAM (`0x000000–0x1FFFFF`); `addr`
+  wraps in that space and `bank` is ignored.
+- Registers: `pc` + `r0`–`r31` (33 × 32-bit), from the V810 core.
+- Framebuffer: the active display rect (typically 256×240), decoded to RGB888
+  by the fork with the surface's channel shifts, so it is correct regardless of
+  Mednafen's display-dependent pixel order.
+- Audio: stereo, at Mednafen's configured output rate (`espec.SoundRate`),
+  teed from the per-frame `SoundBuf`.
+- Input: the PC-FX has a gamepad, not a keyboard, so `/key?text=<c>` and
+  `/key?code=<n>` are both read as a character over a WASD-style pad map —
+  `w/a/s/d` = up/left/down/right, space or Enter = RUN (start), `c` = SELECT,
+  `1`–`6` = buttons I–VI. A held button is re-asserted each frame (the frontend
+  rewrites the pad from physical input every frame), so holds persist across
+  `/step`. `/reset` power-cycles the machine.
+
 ---
 
 ## Adoption paths
