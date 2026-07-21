@@ -75,6 +75,7 @@ class EmuControl:
 
     # -- endpoints ---------------------------------------------------------
     def status(self) -> dict:
+        """GET /status — liveness + contract dict; raises on a MAJOR mismatch."""
         body, _ = self._get("/status")
         st = json.loads(body)
         major = int(str(st.get("contract", "0")).split(".")[0])
@@ -86,13 +87,16 @@ class EmuControl:
         return st
 
     def frame(self) -> int:
+        """Current completed-frame counter (the determinism anchor)."""
         return int(self.status()["frame"])
 
     def regs(self) -> dict:
+        """GET /regs — CPU registers as a dict (keys are platform-specific)."""
         body, _ = self._get("/regs")
         return json.loads(body)
 
     def mem(self, addr: int, length: int, bank: int | None = None) -> bytes:
+        """GET /mem — read `length` bytes at `addr` (optional `bank`)."""
         path = f"/mem?addr={addr}&len={length}"
         if bank is not None:
             path += f"&bank={bank}"
@@ -100,13 +104,17 @@ class EmuControl:
         return body
 
     def step(self, frames: int = 1) -> int:
+        """POST /step — advance `frames` complete frames, halt; returns the new
+        frame counter. Meaningful once paused."""
         body = self._post(f"/step?frames={frames}")
         return int(json.loads(body)["frame"])
 
     def pause(self) -> None:
+        """POST /pause — halt the machine (advances only via step())."""
         self._post("/pause")
 
     def resume(self) -> None:
+        """POST /resume — return the machine to free-running."""
         self._post("/resume")
 
     def key(self, text: str | None = None, code: int | None = None,

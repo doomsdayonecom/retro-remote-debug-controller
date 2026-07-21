@@ -9,8 +9,9 @@ all present via `/status.contract`.
 A minimal, portable HTTP API that a retro-platform emulator exposes so an
 external harness can screenshot the screen, read memory and registers, step the
 machine deterministically, and inject input. The same contract is implemented
-by the forked FAB Agon Emulator, the Neo6502 emulator, and the Commander X16
-emulator, so **one** pytest harness drives all three ports.
+by the forked FAB Agon Emulator, the Neo6502 emulator, the Commander X16
+emulator, and the NEC PC-FX (Mednafen) emulator, so **one** pytest harness
+drives all four ports.
 
 ## Principles
 
@@ -52,8 +53,8 @@ Liveness + contract negotiation. Always available.
 }
 ```
 - `contract` — this document's version. Clients MUST reject a mismatched MAJOR.
-- `platform` — one of `x16`, `neo6502`, `agon` (extensible). Tells the client
-  the memory/register model (see *Per-platform* appendix).
+- `platform` — one of `x16`, `neo6502`, `agon`, `pcfx` (extensible). Tells the
+  client the memory/register model (see *Per-platform* appendix).
 - `frame` — monotonic completed-frame counter since boot. The determinism
   anchor: a screenshot taken at `frame == N` shows the state after N complete
   frames.
@@ -67,7 +68,7 @@ The live screen as a Portable Pixmap.
   thread serves that snapshot.
 - Dimensions are the platform's native framebuffer (appendix). Clients read
   `width`/`height` from the PPM header — do not hardcode.
-- Reserved: `?frame=N` (block until frame N) — not required in 0.1.
+- Reserved: `?frame=N` (block until frame N) — still reserved, not yet required.
 
 ### `GET /mem?addr=<a>&len=<n>[&bank=<b>]`
 Raw memory bytes.
@@ -223,9 +224,13 @@ rather than a snapshot.
 - Address space: V810, flat **2 MB** main RAM (`0x000000–0x1FFFFF`); `addr`
   wraps in that space and `bank` is ignored.
 - Registers: `pc` + `r0`–`r31` (33 × 32-bit), from the V810 core.
-- Framebuffer: the active display rect (typically 256×240), decoded to RGB888
-  by the fork with the surface's channel shifts, so it is correct regardless of
-  Mednafen's display-dependent pixel order.
+- Framebuffer: the active display, decoded to RGB888 by the fork with the
+  surface's channel shifts (so it is correct regardless of Mednafen's
+  display-dependent pixel order). The PC-FX varies horizontal resolution per
+  scene (256 for the maze, up to 1024 for high-res text); the fork normalizes
+  each scanline by Mednafen's per-line `LineWidths`, so the PPM is centred and
+  complete at whatever width the scene uses. Height is the visible line count
+  (~232). Clients read `width`/`height` from the PPM header.
 - Audio: stereo, at Mednafen's configured output rate (`espec.SoundRate`),
   teed from the per-frame `SoundBuf`.
 - Input: the PC-FX has a gamepad, not a keyboard, so `/key?text=<c>` and

@@ -3,7 +3,9 @@
  * A retro-platform emulator implements the small read-only backend below and
  * calls retro_control_start(). The shared server (retro_control.c) owns the
  * socket loop, HTTP parsing, PPM/JSON encoding, and control flow
- * (pause / step / free-run). It always binds 127.0.0.1. Contract 0.1.0.
+ * (pause / step / free-run). It always binds 127.0.0.1. Contract version is
+ * RETRO_CONTROL_CONTRACT (below); the server advertises the highest level whose
+ * backend callbacks are all present.
  *
  * Integration is three calls in the emulator's main loop:
  *   retro_control_service();                 // once per iteration (cheap)
