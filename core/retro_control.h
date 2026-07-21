@@ -24,6 +24,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Highest contract the core implements. The server advertises the highest level
  * whose backend callbacks are all present: 0.3.0 needs inject_key + write_mem +
  * capture_audio; 0.2.0 needs inject_key; else 0.1.0. Keeps a partial backend
@@ -114,5 +118,9 @@ void retro_control_on_frame(void);
 
 /* Stop the server (optional; process exit is fine too). */
 void retro_control_stop(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* RETRO_CONTROL_H */
