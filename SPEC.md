@@ -204,6 +204,10 @@ rather than a snapshot.
   ```
 - Framebuffer: from `vgabuf` (the VDP output); the offscreen path already keeps
   video alive (the FAB equivalent of x16's `SDL_VIDEODRIVER=dummy`).
+- Audio: the VDP mixes 8-bit unsigned mono at 16384 Hz; `/audio` returns it as a
+  16-bit signed PCM WAV. The SDL audio callback (the sole `getAudioSamples`
+  consumer) tees each block into the ring; headless capture needs
+  `SDL_AUDIODRIVER=dummy` so that callback runs.
 - Input: `/key?text=c` maps the char to a fabgl virtual key (`ascii2vk`) and
   delivers it via `sendVKeyEventToFabgl`; `?code=<vk>` passes a raw fabgl vkey.
   The control thread queues events; the render thread delivers them (same
