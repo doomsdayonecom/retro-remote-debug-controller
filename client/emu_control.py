@@ -1,7 +1,7 @@
 """emu_control.py — shared client for the Retro Remote Debug Controller.
 
 One client for every port's pytest suite. Speaks the HTTP contract in
-../SPEC.md (0.3.x). Depends only on the stdlib; Pillow is optional and only
+../SPEC.md (0.4.x). Depends only on the stdlib; Pillow is optional and only
 needed for .screenshot().
 
     from emu_control import EmuControl
@@ -150,6 +150,32 @@ class EmuControl:
         Drain regularly (e.g. after each step) so the ring doesn't overflow."""
         body, _ = self._get("/audio")
         return body
+
+    def pointer(self, x: int | None = None, y: int | None = None,
+                dx: int | None = None, dy: int | None = None,
+                buttons: int | None = None) -> None:
+        """Inject a pointer move/click (contract 0.4). Give absolute (x, y) or
+        relative (dx, dy). `buttons` is a bitmask (bit0=primary, bit1=secondary);
+        omit it for a pure move (leaves the button state unchanged). Hold buttons
+        across step() frames for a program that samples the pointer each frame."""
+        parts = []
+        if x is not None and y is not None:
+            parts.append(f"x={x}")
+            parts.append(f"y={y}")
+        elif dx is not None or dy is not None:
+            parts.append(f"dx={dx if dx is not None else 0}")
+            parts.append(f"dy={dy if dy is not None else 0}")
+        else:
+            raise EmuControlError("pointer() needs x= and y=, or dx=/dy=")
+        if buttons is not None:
+            parts.append(f"buttons={buttons}")
+        self._post("/pointer?" + "&".join(parts))
+
+    def pointer_get(self) -> dict:
+        """GET /pointer — the current pointer as {x, y, buttons} (contract 0.4).
+        `buttons` uses the same bitmask as pointer()."""
+        body, _ = self._get("/pointer")
+        return json.loads(body)
 
     def screenshot_ppm(self) -> bytes:
         """Return the live screen as raw PPM (P6) bytes. Stdlib-only."""

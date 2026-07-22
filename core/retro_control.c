@@ -25,6 +25,7 @@ void retro_control_stop(void) {}
 #include <stdatomic.h>
 #include <unistd.h>
 #include <errno.h>
+#include <limits.h>
 #include <signal.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -51,7 +52,7 @@ static int  g_step_waiting  = 0;
 
 /* single-slot marshalled request. */
 typedef enum { REQ_NONE = 0, REQ_MEM, REQ_REGS, REQ_SHOT, REQ_KEY, REQ_RESET,
-               REQ_WRITE, REQ_AUDIO } req_t;
+               REQ_WRITE, REQ_AUDIO, REQ_PTR_SET, REQ_PTR_GET } req_t;
 static volatile req_t g_req = REQ_NONE;
 static uint32_t g_req_addr, g_req_len;
 static int32_t  g_req_bank;
@@ -59,6 +60,9 @@ static const uint8_t *g_write_data;   /* POST /mem body (HTTP-thread owned) */
 static int      g_key_is_text;   /* 1 => g_key_value is a char code point */
 static uint32_t g_key_value;
 static int      g_key_action;    /* retro_key_action_t */
+static int      g_ptr_absolute;  /* 1 => (x,y) absolute; 0 => relative deltas */
+static int32_t  g_ptr_x, g_ptr_y;
+static int      g_ptr_buttons;   /* button bitmask, or -1 = leave unchanged */
 static char     g_resp_extra[64];     /* extra response header line, or "" */
 
 static uint8_t    *g_resp_body  = NULL;
@@ -222,6 +226,48 @@ void retro_control_service(void)
             g_resp_ctype = "application/json";
         }
         break;
+    case REQ_PTR_SET: {
+        const char *json;
+        if (!g_be->set_pointer) {
+            json = "{\"error\":\"not implemented\"}"; g_resp_status = 501;
+        } else if (g_be->set_pointer(g_ptr_absolute, g_ptr_x, g_ptr_y, g_ptr_buttons)) {
+            json = "{\"injected\":true}"; g_resp_status = 200;
+        } else {
+            json = "{\"error\":\"no pointer\"}"; g_resp_status = 400;
+        }
+        size_t l = strlen(json);
+        uint8_t *b = (uint8_t *)malloc(l + 1);
+        if (b) memcpy(b, json, l + 1);
+        g_resp_body = b; g_resp_len = b ? l : 0;
+        g_resp_ctype = "application/json";
+        break;
+    }
+    case REQ_PTR_GET: {
+        char *b;
+        if (!g_be->get_pointer) {
+            const char *json = "{\"error\":\"not implemented\"}";
+            size_t l = strlen(json); b = (char *)malloc(l + 1);
+            if (b) memcpy(b, json, l + 1);
+            g_resp_len = b ? l : 0; g_resp_status = 501;
+        } else {
+            int32_t x = 0, y = 0; int buttons = 0;
+            int ok = g_be->get_pointer(&x, &y, &buttons);
+            b = (char *)malloc(96);
+            if (!b) { g_resp_len = 0; g_resp_status = 500; }
+            else if (ok) {
+                g_resp_len = (size_t)snprintf(b, 96,
+                    "{\"x\":%ld,\"y\":%ld,\"buttons\":%d}",
+                    (long)x, (long)y, buttons);
+                g_resp_status = 200;
+            } else {
+                g_resp_len = (size_t)snprintf(b, 96, "{\"error\":\"no pointer\"}");
+                g_resp_status = 400;
+            }
+        }
+        g_resp_body = (uint8_t *)b;
+        g_resp_ctype = "application/json";
+        break;
+    }
     default: break;
     }
     g_req = REQ_NONE;
@@ -352,6 +398,8 @@ static void do_status(int fd)
     unsigned long long fc = g_be->get_frame_count ? g_be->get_frame_count() : 0;
     /* Advertise the highest level whose defining callbacks are all present. */
     const char *contract =
+        (g_be->inject_key && g_be->write_mem && g_be->capture_audio &&
+         g_be->set_pointer && g_be->get_pointer) ? "0.4.0" :
         (g_be->inject_key && g_be->write_mem && g_be->capture_audio) ? "0.3.0" :
         g_be->inject_key ? "0.2.0" : "0.1.0";
     char buf[320];
@@ -497,6 +545,28 @@ static void handle_conn(int fd)
     if (!strcmp(target, "/reset")) {
         if (!is_post) { send_json(fd, 405, "{\"error\":\"POST only\"}"); return; }
         do_marshalled(fd, REQ_RESET);
+        return;
+    }
+    if (!strcmp(target, "/pointer")) {
+        if (is_post) {                        /* 0.4: move/click the pointer */
+            long x  = query_long(query, "x",  LONG_MIN);
+            long y  = query_long(query, "y",  LONG_MIN);
+            long dx = query_long(query, "dx", LONG_MIN);
+            long dy = query_long(query, "dy", LONG_MIN);
+            if (x != LONG_MIN && y != LONG_MIN) {
+                g_ptr_absolute = 1; g_ptr_x = (int32_t)x; g_ptr_y = (int32_t)y;
+            } else if (dx != LONG_MIN || dy != LONG_MIN) {
+                g_ptr_absolute = 0;
+                g_ptr_x = (int32_t)(dx == LONG_MIN ? 0 : dx);
+                g_ptr_y = (int32_t)(dy == LONG_MIN ? 0 : dy);
+            } else {
+                send_json(fd, 400, "{\"error\":\"pointer needs x&y or dx&dy\"}"); return;
+            }
+            g_ptr_buttons = (int)query_long(query, "buttons", -1);   /* -1 = unchanged */
+            do_marshalled(fd, REQ_PTR_SET);
+        } else {                              /* 0.4: read back the pointer */
+            do_marshalled(fd, REQ_PTR_GET);
+        }
         return;
     }
     send_json(fd, 404, "{\"error\":\"not found\"}");

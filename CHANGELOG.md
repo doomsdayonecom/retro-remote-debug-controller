@@ -7,6 +7,17 @@ far has been purely additive — older clients keep working, and a server
 advertises the highest level whose backend callbacks are all present via
 `/status.contract`.
 
+## 0.4.0
+- `POST /pointer?x=&y=[&buttons=]` (absolute) or `?dx=&dy=[&buttons=]` (relative)
+  — inject a pointer move/click through the platform's native mouse path.
+  `buttons` is a bitmask (bit0=primary, bit1=secondary); omit for a pure move.
+  Backend callback: `set_pointer`.
+- `GET /pointer` — read back the current pointer `{x, y, buttons}`, so a test can
+  tell "input never arrived" from "wrong output drawn". Backend callback:
+  `get_pointer`.
+- First consumer: the Neo6502 fork (drives the firmware mouse), unblocking the
+  pointer floor of the `rstar-api` RWM/RGM toolkit.
+
 ## 0.3.0
 - `POST /mem?addr=&bank=` — write (poke) memory; bytes in the request body,
   returns `{"written":n}`. Backend callback: `write_mem`.

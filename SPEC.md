@@ -1,10 +1,11 @@
 # Retro Remote Debug Controller — HTTP Control Contract
 
-**Contract version: 0.3.0** (semver; clients assert on the MAJOR). 0.3 adds
-memory write (`POST /mem`) and an audio drain (`GET /audio`); 0.2 added input
-injection (`POST /key`, `POST /reset`). Every minor is purely additive, so older
-clients keep working and servers advertise the highest level whose callbacks are
-all present via `/status.contract`.
+**Contract version: 0.4.0** (semver; clients assert on the MAJOR). 0.4 adds
+pointer injection (`POST /pointer`, `GET /pointer`); 0.3 added memory write
+(`POST /mem`) and an audio drain (`GET /audio`); 0.2 added input injection
+(`POST /key`, `POST /reset`). Every minor is purely additive, so older clients
+keep working and servers advertise the highest level whose callbacks are all
+present via `/status.contract`.
 
 A minimal, portable HTTP API that a retro-platform emulator exposes so an
 external harness can screenshot the screen, read memory and registers, step the
@@ -44,7 +45,7 @@ drives all four ports.
 Liveness + contract negotiation. Always available.
 ```json
 {
-  "contract": "0.3.0",
+  "contract": "0.4.0",
   "emulator": "x16emu",
   "platform": "x16",
   "frame": 12345,
@@ -130,6 +131,37 @@ Inject a key. Query params (like `/mem` and `/step`), no body:
 Injection plus `/step` retires scripted-autoexec input: press → step → assert →
 release, deterministically.
 
+### `POST /pointer?x=<n>&y=<n> | ?dx=<n>&dy=<n>  [&buttons=<mask>]`  *(0.4)*
+Inject a pointer (mouse) move and/or click through the platform's native pointer
+path — the mouse analogue of `/key`. Query params (no body):
+- `x`, `y` — **absolute** pointer position, in the platform's pointer coordinate
+  space (framebuffer pixels; appendix). Provide both.
+- `dx`, `dy` — **relative** motion applied to the current position; either may be
+  omitted (treated as 0). `x`/`y` and `dx`/`dy` are alternatives; provide one
+  pair. Absolute is preferred for tests ("put the cursor on the button" beats
+  dead-reckoning).
+- `buttons` — OPTIONAL bitmask, **bit0 = primary, bit1 = secondary**. Omitted →
+  the button state is left unchanged (a pure move). Provide `buttons=0` to
+  release. Hold a button across `/step` frames (re-assert it each move) so a
+  program that samples the pointer per frame sees the press.
+- Response: `{ "injected": true }`. No pointer on the platform → 400.
+
+Device-level, not driver-state: the injection MUST exercise the same path a real
+mouse takes (e.g. the KERNAL/VERA mouse on the X16, the firmware mouse on the
+Neo6502), so what the program reads is what a physical mouse would produce.
+Determinism: inject under `/pause`, then `/step` — the move lands at the frame
+boundary, so screenshot-diffing a hovered/clicked UI is reproducible.
+
+### `GET /pointer`  *(0.4)*
+Read back the current pointer state. Response:
+```json
+{ "x": 42, "y": 24, "buttons": 1 }
+```
+- `x`, `y` — current position in the same coordinate space as `POST /pointer`.
+- `buttons` — the current button bitmask (same bit assignment).
+- Lets a test distinguish "the input never reached the platform" from "it
+  arrived but the program drew the wrong thing". No pointer on the platform → 400.
+
 ### `POST /reset`  *(0.2)*
 Soft/cold reset the machine. Response `{ "reset": true }`. The `frame` counter
 MAY reset here (the one case `/status.frame` is allowed to go backwards).
@@ -185,12 +217,23 @@ rather than a snapshot.
 - Frame source: `video.c` `frame_count`.
 - Audio: stereo (2 ch), native rate `25000000/512` ≈ **48828 Hz**, teed from the
   mixed `audio_render()` output.
+- Pointer: `/pointer` maps to the KERNAL/VERA mouse — absolute/relative position
+  and buttons fed through the same path the host mouse uses, so `MOUSE_GET`
+  (and VERA sprite 0) see it. Coordinates are screen pixels. (Backend
+  callbacks not yet wired — until then the X16 fork advertises 0.3.0 and
+  `/pointer` returns 501.)
 
 ### Neo6502 — neo6502 emulator
 - Flag: `--control-port <N>`.
 - Address space: flat 64 KB; `bank` ignored.
 - Registers: 6502 `a x y sp pc status`.
 - Framebuffer: native resolution per the emulator's video mode.
+- Pointer: `/pointer` drives the firmware mouse — absolute → `MSESetPosition`,
+  relative → `MSEOffsetPosition`, buttons → `MSEUpdateButtonState`; `GET /pointer`
+  reads `MSEGetState`. Coordinates are firmware graphics pixels (the same space a
+  program reads). Buttons: bit0 = left, bit1 = right (the firmware's native
+  masks), matching the contract's primary/secondary. The emulator enables the
+  mouse at reset, so injection works from boot.
 
 ### Agon (Console8 / Light 2) — FAB Agon Emulator
 - **Adoption:** conform-only (Rust emulator — keeps its own HTTP server, matches
@@ -249,11 +292,12 @@ is required. Two ways to get there:
 
 - **Vendor the shared core** (`core/retro_control.c` + `.h`) — for C/C++
   emulators. Implement the backend callbacks (four are enough for 0.1; add
-  `inject_key`/`reset` for 0.2 and `write_mem`/`capture_audio` for 0.3 — a NULL
-  callback makes its endpoint return 501 and lowers the advertised contract),
-  wire three loop hooks, call `retro_control_start(port, &backend)`; the socket
-  loop, HTTP parsing, PPM/JSON encoding and pause/step control come for free.
-  The Commander X16 fork does this.
+  `inject_key`/`reset` for 0.2, `write_mem`/`capture_audio` for 0.3, and
+  `set_pointer`/`get_pointer` for 0.4 — a NULL callback makes its endpoint return
+  501 and lowers the advertised contract), wire three loop hooks, call
+  `retro_control_start(port, &backend)`; the socket loop, HTTP parsing, PPM/JSON
+  encoding and pause/step control come for free. The Commander X16 fork does
+  this.
 - **Conform directly** — for emulators in other languages (the FAB Agon emulator
   is Rust). Keep your own HTTP server; just match the contract and pass the
   conformance suite. Sharing the C core is an optimization, not a requirement —

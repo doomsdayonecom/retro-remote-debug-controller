@@ -31,10 +31,10 @@ extern "C" {
 #endif
 
 /* Highest contract the core implements. The server advertises the highest level
- * whose backend callbacks are all present: 0.3.0 needs inject_key + write_mem +
- * capture_audio; 0.2.0 needs inject_key; else 0.1.0. Keeps a partial backend
- * honest. */
-#define RETRO_CONTROL_CONTRACT "0.3.0"
+ * whose backend callbacks are all present: 0.4.0 needs set_pointer + get_pointer
+ * (on top of 0.3); 0.3.0 needs inject_key + write_mem + capture_audio; 0.2.0
+ * needs inject_key; else 0.1.0. Keeps a partial backend honest. */
+#define RETRO_CONTROL_CONTRACT "0.4.0"
 
 /* Native framebuffer pixel layout; the server swizzles to PPM RGB. */
 typedef enum {
@@ -99,6 +99,20 @@ typedef struct retro_control_backend {
      * Return the number of int16 samples written. NULL => /audio returns 501. */
     uint32_t (*capture_audio)(int16_t *out, uint32_t cap,
                               int *rate, int *channels, uint32_t *dropped);
+
+    /* 0.4: inject a pointer (mouse) move/click through the platform's native
+     * pointer path. `absolute` nonzero => (x,y) are absolute pointer
+     * coordinates (framebuffer/pointer space); zero => (x,y) are relative
+     * deltas applied to the current position. `buttons` is a bitmask
+     * (bit0 = primary, bit1 = secondary), or -1 to leave the button state
+     * unchanged (a pure move). Return 1 on success, 0 if the platform has no
+     * pointer (server -> 400). NULL => POST /pointer returns 501. */
+    int (*set_pointer)(int absolute, int32_t x, int32_t y, int buttons);
+
+    /* 0.4: report the current pointer position and button bitmask (same
+     * semantics as set_pointer's `buttons`). Return 1 on success (values
+     * written), 0 if no pointer is available. NULL => GET /pointer returns 501. */
+    int (*get_pointer)(int32_t *x, int32_t *y, int *buttons);
 } retro_control_backend_t;
 
 /* Start the server thread bound to 127.0.0.1:port. Non-blocking; 0 on success,
