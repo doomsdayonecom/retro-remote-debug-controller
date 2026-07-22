@@ -1,7 +1,11 @@
 """Contract conformance tests (SPEC.md 0.3.x). Platform-agnostic: framebuffer
-dimensions come from the PPM header, addresses use $0000, and `bank` is
-exercised but banking is not required. Tests gated on the server's advertised
-minor (input injection 0.2; memory write + audio 0.3) skip on older servers."""
+dimensions come from the PPM header, read addresses use $0000, and `bank` is
+exercised but banking is not required. The one address that must be *writable*
+(the mem-write round-trip) is chosen per-platform via `_scratch_ram`, because
+low memory is not RAM everywhere — on the eZ80 Agon $0000-$03FFFF is on-chip
+flash (MOS ROM) and RAM only begins at $040000. Tests gated on the server's
+advertised minor (input injection 0.2; memory write + audio 0.3) skip on older
+servers."""
 import urllib.error
 import urllib.request
 
@@ -117,13 +121,22 @@ def test_key_requires_post(emu):
 
 # -- contract 0.3: memory write + audio (skipped on < 0.3 servers) -----------
 
+def _scratch_ram(emu):
+    """A writable RAM address for the platform. Most cores are flat with RAM at
+    $0000, but the eZ80 Agon maps $0000-$03FFFF to flash (MOS ROM), so a write
+    there is a silent no-op and the read-back returns ROM. RAM starts at
+    $040000 there; $050000 is well clear of the MOS load area."""
+    plat = (emu.status().get("platform") or "").lower()
+    return 0x050000 if "agon" in plat else 0x0400
+
+
 def test_mem_write_roundtrip(emu):
     """POST /mem pokes bytes; GET /mem reads them back (contract 0.3)."""
     if _contract_minor(emu) < 3:
         pytest.skip("contract < 0.3 (no memory write)")
     emu.pause()               # freeze so the machine can't overwrite between write+read
     try:
-        addr, payload = 0x0400, bytes([0xA5, 0x5A, 0x00, 0xFF])
+        addr, payload = _scratch_ram(emu), bytes([0xA5, 0x5A, 0x00, 0xFF])
         assert emu.mem_write(addr, payload) == len(payload)
         assert emu.mem(addr, len(payload)) == payload
     finally:
