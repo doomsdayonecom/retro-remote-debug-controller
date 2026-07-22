@@ -256,6 +256,16 @@ rather than a snapshot.
   delivers it via `sendVKeyEventToFabgl`; `?code=<vk>` passes a raw fabgl vkey.
   The control thread queues events; the render thread delivers them (same
   thread as normal keyboard input). `/reset` triggers the soft-reset atomic.
+- Pointer: `/pointer` feeds PS/2 mouse packets through `sendHostMouseEventToFabgl`
+  — the same device path host mouse motion uses, so it drives the real fabgl/VDP
+  mouse rather than a shortcut. PS/2 motion is relative, so the control server
+  tracks the absolute position itself: `x`/`y` become a delta from that tracked
+  point (split across packets past the ±127 int9 range), `dx`/`dy` apply directly,
+  and `GET /pointer` reports it exactly. Coordinates are screen space (x right,
+  y down; y is negated into the PS/2 up-positive convention). `buttons` bit0/bit1
+  map to the PS/2 left/right (primary/secondary) button bits. Like `/key`, packets
+  are queued by the control thread and delivered by the render thread at the frame
+  boundary, so `pause → pointer → step(1) → screenshot` is reproducible.
 
 ### NEC PC-FX — `mednafen` (Doomsday One fork)
 - **Adoption:** vendors the shared core as a git submodule
