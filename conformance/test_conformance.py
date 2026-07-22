@@ -165,6 +165,47 @@ def test_audio_is_valid_wav(emu):
     emu.resume()
 
 
+# -- contract 0.4: pointer injection (skipped on < 0.4 servers) --------------
+
+def test_pointer_injection(emu):
+    """/pointer accepts absolute (x,y) and relative (dx,dy) with an optional
+    buttons= bitmask, and rejects a request with neither. The pointer's *effect*
+    is platform-specific and tested per-port; here we assert the contract
+    surface only."""
+    if _contract_minor(emu) < 4:
+        pytest.skip("contract < 0.4 (no pointer injection)")
+    emu.pointer(x=10, y=20)                 # absolute move, buttons unchanged
+    emu.pointer(x=10, y=20, buttons=1)      # primary button down
+    emu.pointer(x=10, y=20, buttons=0)      # buttons released
+    emu.pointer(dx=4, dy=-2)                # relative move
+    code, _ = _raw(emu, "POST", "/pointer")  # neither x/y nor dx/dy
+    assert code == 400
+
+
+def test_pointer_readback(emu):
+    """GET /pointer reports {x, y, buttons} as ints (contract 0.4). Values are
+    platform-specific; we assert only shape."""
+    if _contract_minor(emu) < 4:
+        pytest.skip("contract < 0.4")
+    emu.pause()
+    try:
+        emu.pointer(x=42, y=24, buttons=0)
+        emu.step(1)
+        p = emu.pointer_get()
+        assert {"x", "y", "buttons"} <= p.keys()
+        assert all(isinstance(p[k], int) for k in ("x", "y", "buttons"))
+    finally:
+        emu.resume()
+
+
+def test_pointer_get_is_get(emu):
+    if _contract_minor(emu) < 4:
+        pytest.skip("contract < 0.4")
+    # GET /pointer is the readback path (200); POST is the inject path.
+    code, _ = _raw(emu, "GET", "/pointer")
+    assert code == 200
+
+
 def test_reset(emu):
     """/reset responds and is POST-only. Runs last (it restarts the machine)."""
     if _contract_minor(emu) < 2:

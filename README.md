@@ -17,8 +17,10 @@ An emulator launched with a control-port flag exposes a localhost HTTP server:
 | `POST /key`, `POST /reset` | inject input / reset | 0.2 |
 | `POST /mem?addr=&bank=` | write (poke) memory | 0.3 |
 | `GET /audio` | drain synthesised PCM as a WAV | 0.3 |
+| `POST /pointer?x=&y=&buttons=` | inject a pointer move/click | 0.4 |
+| `GET /pointer` | read back pointer position + buttons | 0.4 |
 
-Current contract: **0.3.0**. Minors are purely additive (a missing capability
+Current contract: **0.4.0**. Minors are purely additive (a missing capability
 returns 501 and lowers the advertised contract), so a client reads
 `/status.contract` and fails fast only on a MAJOR mismatch. See [SPEC.md](SPEC.md).
 
@@ -70,8 +72,9 @@ The vendor path is one backend struct plus three hooks:
 ```c
 #include "retro_control.h"
 
-/* Four callbacks satisfy 0.1; add inject_key/reset for 0.2 and
-   write_mem/capture_audio for 0.3. A NULL callback 501s its endpoint. */
+/* Four callbacks satisfy 0.1; add inject_key/reset for 0.2,
+   write_mem/capture_audio for 0.3, set_pointer/get_pointer for 0.4.
+   A NULL callback 501s its endpoint. */
 static const retro_control_backend_t backend = {
     .platform        = "x16",
     .emulator        = "x16emu",
@@ -83,6 +86,8 @@ static const retro_control_backend_t backend = {
     .reset           = x16_reset,            /* 0.2 */
     .write_mem       = x16_write_mem,        /* 0.3 */
     .capture_audio   = x16_capture_audio,    /* 0.3 */
+    .set_pointer     = x16_set_pointer,      /* 0.4 */
+    .get_pointer     = x16_get_pointer,      /* 0.4 */
 };
 
 if (control_port)                 /* set by -controlport / --control-port / env */
@@ -101,8 +106,9 @@ if (frame_completed) retro_control_on_frame();   /* tick the /step budget */
 
 ## Status
 
-Contract **0.3.0**, implemented across **four** emulators. The shared server and
-the conformance suite (15 tests, green against the reference) are complete.
-Reference implementation: the Commander X16 fork (`x16-emulator`), which vendors
-`core/` as a git submodule; the NEC PC-FX fork (Mednafen) does the same, and the
-FAB Agon emulator conforms directly in Rust.
+Contract **0.4.0**, implemented across **four** emulators. The shared server and
+the conformance suite (18 tests) are complete; the three 0.4 pointer tests are
+exercised by the Neo6502 fork (the first 0.4 consumer) and skip on servers still
+at 0.3. Reference implementation: the Commander X16 fork (`x16-emulator`), which
+vendors `core/` as a git submodule; the NEC PC-FX fork (Mednafen) does the same,
+and the FAB Agon emulator conforms directly in Rust.
