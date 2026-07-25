@@ -20,6 +20,7 @@ import io
 import json
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 CONTRACT_MAJOR = 0
@@ -125,7 +126,9 @@ class EmuControl:
         a program that samples input each frame."""
         parts = []
         if text is not None:
-            parts.append(f"text={text}")
+            # Percent-encode so a '+' isn't decoded to a space and '&'/'#'/'%'
+            # don't truncate or corrupt the value. safe="" encodes '+' too.
+            parts.append(f"text={urllib.parse.quote(text, safe='')}")
         if code is not None:
             parts.append(f"code={code}")
         if down is not None:
