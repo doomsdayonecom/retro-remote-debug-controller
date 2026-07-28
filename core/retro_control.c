@@ -397,8 +397,19 @@ static long query_long(const char *q, const char *key, long def)
     return def;
 }
 
-/* copy the value of query key into out (NUL-terminated, truncated to cap).
- * Returns 1 if the key was present, 0 otherwise. */
+/* one hex nibble, or -1. */
+static int hex_nibble(int c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* copy the value of query key into out (NUL-terminated, truncated to cap),
+ * percent-decoding it (form-urlencoded: %XX -> byte, '+' -> space). Numeric
+ * params are read with query_long straight off the raw query, so only string
+ * values (e.g. text=) are decoded here. Returns 1 if the key was present. */
 static int query_str(const char *q, const char *key, char *out, size_t cap)
 {
     size_t kl = strlen(key);
@@ -407,10 +418,22 @@ static int query_str(const char *q, const char *key, char *out, size_t cap)
         if (!strncmp(p, key, kl) && p[kl] == '=') {
             const char *v = p + kl + 1;
             const char *e = strchr(v, '&');
-            size_t n = e ? (size_t)(e - v) : strlen(v);
-            if (n >= cap) n = cap - 1;
-            memcpy(out, v, n);
-            out[n] = 0;
+            const char *end = e ? e : v + strlen(v);
+            size_t w = 0;
+            for (const char *r = v; r < end && w + 1 < cap; ) {
+                int hi, lo;
+                if (r[0] == '%' && r + 2 < end &&
+                    (hi = hex_nibble(r[1])) >= 0 && (lo = hex_nibble(r[2])) >= 0) {
+                    out[w++] = (char)((hi << 4) | lo);
+                    r += 3;
+                } else if (r[0] == '+') {
+                    out[w++] = ' ';
+                    r += 1;
+                } else {
+                    out[w++] = *r++;
+                }
+            }
+            out[w] = 0;
             return 1;
         }
         p = strchr(p, '&');
