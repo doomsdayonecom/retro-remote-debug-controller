@@ -162,6 +162,53 @@ Read back the current pointer state. Response:
 - Lets a test distinguish "the input never reached the platform" from "it
   arrived but the program drew the wrong thing". No pointer on the platform → 400.
 
+### `POST /pad?index=<n>  [&buttons=<mask>] [&connected=0|1]`  *(0.5)*
+Inject a game controller — the pad analogue of `/key` and `/pointer`. Query
+params (no body):
+- `index` — which pad, 0-based. OPTIONAL, default 0.
+- `buttons` — bitmask of what is HELD, in the canonical layout below. Omitted →
+  the button state is left unchanged. `buttons=0` releases everything while
+  leaving the pad connected.
+- `connected` — OPTIONAL. `1` (the default whenever `buttons` is given) presents
+  a **virtual pad** at `index`; `0` unplugs it. Unplugging matters: a program
+  that asks "is a controller present" before offering two-player must be
+  testable in both states, and on most platforms the count is what it asks.
+- Response: `{ "injected": true }`. No controller support on the platform → 400.
+
+Canonical button layout, low bit first:
+
+| bit | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| | LEFT | RIGHT | UP | DOWN | A | B | X | Y | START | SELECT | L | R |
+
+This is the SNES/Neo6502 native order, chosen for the same reason `/pointer`
+fixed bit0 = primary: **one layout, defined once, so a test written against one
+platform reads the same on another.** A backend whose hardware disagrees — the
+X16 KERNAL reports RIGHT/LEFT/DOWN/UP — converts in its own floor. A test never
+learns which machine it is on, which is the entire point.
+
+Device-level, not driver-state: the injection MUST exercise the same path a real
+pad takes, so what the program reads is what physical hardware would produce. On
+an emulator that reads SDL joysticks, that means presenting a virtual pad the
+existing read path picks up — **not** driving SDL, which would need a joystick
+to exist and defeats the purpose. Headless CI has no joystick; that is the case
+this endpoint is for.
+
+Hold across frames: a pad is a LEVEL, not an event. `buttons` stays as set until
+changed, so a press survives any number of `/step` frames without re-asserting —
+unlike `/key`, whose TAP is deliberately momentary. Release explicitly.
+
+### `GET /pad?index=<n>`  *(0.5)*
+Read back a pad. Response:
+```json
+{ "index": 0, "connected": true, "buttons": 48 }
+```
+- `connected` — whether anything is present at that index, real or virtual.
+- `buttons` — the current mask in the layout above.
+- Same job as `GET /pointer`: distinguishes "the input never reached the
+  platform" from "it arrived and the program ignored it". No controller support
+  on the platform → 400.
+
 ### `POST /reset`  *(0.2)*
 Soft/cold reset the machine. Response `{ "reset": true }`. The `frame` counter
 MAY reset here (the one case `/status.frame` is allowed to go backwards).

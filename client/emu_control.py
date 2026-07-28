@@ -177,6 +177,47 @@ class EmuControl:
         body, _ = self._get("/pointer")
         return json.loads(body)
 
+    # Canonical pad bitmask (SPEC "Canonical button layout"). The SNES /
+    # Neo6502 native order, fixed across platforms so a test written on one
+    # machine reads the same on another.
+    PAD_LEFT   = 0x0001
+    PAD_RIGHT  = 0x0002
+    PAD_UP     = 0x0004
+    PAD_DOWN   = 0x0008
+    PAD_A      = 0x0010
+    PAD_B      = 0x0020
+    PAD_X      = 0x0040
+    PAD_Y      = 0x0080
+    PAD_START  = 0x0100
+    PAD_SELECT = 0x0200
+    PAD_L      = 0x0400
+    PAD_R      = 0x0800
+
+    def pad(self, buttons: int | None = None, index: int = 0,
+            connected: bool | None = None) -> None:
+        """Present a virtual controller and set what is held (contract 0.5).
+
+        `buttons` is a mask of PAD_* — omit to leave the held state alone.
+        `connected=False` unplugs the pad, which is testable behaviour in its
+        own right: a program that asks whether a controller is present before
+        offering two-player needs both answers.
+
+        Unlike key(), a pad is a LEVEL: the state persists across step()
+        frames until changed, so a press does not need re-asserting. Release
+        with pad(0)."""
+        parts = [f"index={index}"]
+        if buttons is not None:
+            parts.append(f"buttons={buttons}")
+        if connected is not None:
+            parts.append(f"connected={1 if connected else 0}")
+        self._post("/pad?" + "&".join(parts))
+
+    def pad_get(self, index: int = 0) -> dict:
+        """GET /pad — {index, connected, buttons} (contract 0.5). Distinguishes
+        'the input never arrived' from 'it arrived and was ignored'."""
+        body, _ = self._get(f"/pad?index={index}")
+        return json.loads(body)
+
     def screenshot_ppm(self) -> bytes:
         """Return the live screen as raw PPM (P6) bytes. Stdlib-only."""
         body, _ = self._get("/screenshot")

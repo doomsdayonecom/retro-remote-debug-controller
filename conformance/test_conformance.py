@@ -213,3 +213,86 @@ def test_reset(emu):
     code, _ = _raw(emu, "GET", "/reset")
     assert code == 405
     emu.reset()
+
+
+# -- contract 0.5: pad injection (skipped on < 0.5 servers) ------------------
+
+def test_pad_injection(emu):
+    """/pad presents a virtual controller and sets what is held. The pad's
+    *effect* is platform-specific and tested per-port; the contract surface is
+    asserted here."""
+    if _contract_minor(emu) < 5:
+        pytest.skip("contract < 0.5 (no pad injection)")
+    emu.pad(buttons=emu.PAD_A)                      # A held, pad plugged in
+    emu.pad(buttons=emu.PAD_A | emu.PAD_LEFT)       # two at once
+    emu.pad(buttons=0)                              # all released, still there
+    emu.pad(index=1, buttons=emu.PAD_B)             # a second pad
+    emu.pad(connected=False)                        # unplug pad 0
+    emu.pad(connected=False, index=1)
+
+
+def test_pad_readback(emu):
+    """GET /pad reports {index, connected, buttons} (contract 0.5)."""
+    if _contract_minor(emu) < 5:
+        pytest.skip("contract < 0.5")
+    emu.pause()
+    try:
+        emu.pad(buttons=emu.PAD_A | emu.PAD_RIGHT)
+        emu.step(1)
+        st = emu.pad_get()
+        assert isinstance(st["buttons"], int)
+        assert isinstance(st["connected"], bool)
+        assert st["index"] == 0
+        assert st["connected"] is True, "injected pad reports itself absent"
+        # The mask must survive the round trip: this is the check that
+        # separates "the server accepted it" from "the backend stored it".
+        assert st["buttons"] == emu.PAD_A | emu.PAD_RIGHT, (
+            f"held {st['buttons']:#x}, injected "
+            f"{emu.PAD_A | emu.PAD_RIGHT:#x}")
+    finally:
+        emu.pad(buttons=0)
+        emu.resume()
+
+
+def test_pad_is_a_level_not_an_event(emu):
+    """A pad HOLDS. Unlike a key tap, an injected press must survive stepping —
+    a program that samples input once a frame has to still see it on frame 10.
+    This is the difference that makes /pad worth having rather than reusing
+    /key, so it is asserted rather than assumed."""
+    if _contract_minor(emu) < 5:
+        pytest.skip("contract < 0.5")
+    emu.pause()
+    try:
+        emu.pad(buttons=emu.PAD_B)
+        emu.step(10)
+        assert emu.pad_get()["buttons"] == emu.PAD_B, (
+            "the held mask did not survive 10 frames — /pad is behaving "
+            "like a momentary key tap")
+    finally:
+        emu.pad(buttons=0)
+        emu.resume()
+
+
+def test_pad_unplug_is_observable(emu):
+    """connected=0 must actually unplug. A program that offers two-player only
+    when a second controller is present needs both answers to be reachable, so
+    a backend that always reports 'connected' is not conformant."""
+    if _contract_minor(emu) < 5:
+        pytest.skip("contract < 0.5")
+    emu.pause()
+    try:
+        emu.pad(connected=False)
+        if emu.pad_get()["connected"]:
+            pytest.skip(
+                "a physical controller is present at index 0, so `connected` "
+                "cannot go false — the SPEC says it reports anything present, "
+                "real or virtual. Re-run with the controller unplugged.")
+        emu.pad(buttons=0)                     # plugging in is what we assert
+        assert emu.pad_get()["connected"] is True, (
+            "injecting did not make the pad present")
+        emu.pad(connected=False)
+        assert emu.pad_get()["connected"] is False, (
+            "the pad still reports connected after connected=0")
+    finally:
+        emu.pad(connected=False)
+        emu.resume()
