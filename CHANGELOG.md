@@ -7,6 +7,27 @@ far has been purely additive — older clients keep working, and a server
 advertises the highest level whose backend callbacks are all present via
 `/status.contract`.
 
+## 0.5.0
+- `POST /pad?index=[&buttons=][&connected=]` — present a **virtual game
+  controller** and set what is held. `buttons` is the canonical mask (bit0 LEFT,
+  1 RIGHT, 2 UP, 3 DOWN, 4 A, 5 B, 6 X, 7 Y, 8 START, 9 SELECT, 10 L, 11 R —
+  the SNES/Neo6502 native order, fixed across platforms). `connected=0` unplugs.
+  Backend callback: `set_pad`.
+- `GET /pad?index=` — read back `{index, connected, buttons}`, so a test can tell
+  "the input never arrived" from "it arrived and was ignored". Backend callback:
+  `get_pad`.
+- A pad is a **level, not an event**: the held mask persists across `/step`
+  frames until changed, unlike `/key`'s momentary tap. Conformance asserts this
+  directly, because it is the property that makes `/pad` worth having rather
+  than reusing `/key`.
+- **Virtual, not SDL.** A backend presents a device its existing read path picks
+  up rather than driving the host's joystick API. Headless CI has no joystick,
+  and that is precisely the case this endpoint exists for.
+- Motivation: a real bug that shipped. A port's pad read masked the firmware's
+  merged controller down to its d-pad and tried to recover the buttons from the
+  wrong controller index — movement worked, fire did nothing, and there was no
+  way to catch it without a human holding hardware.
+
 ## 0.4.0
 - `POST /pointer?x=&y=[&buttons=]` (absolute) or `?dx=&dy=[&buttons=]` (relative)
   — inject a pointer move/click through the platform's native mouse path.

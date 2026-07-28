@@ -31,10 +31,11 @@ extern "C" {
 #endif
 
 /* Highest contract the core implements. The server advertises the highest level
- * whose backend callbacks are all present: 0.4.0 needs set_pointer + get_pointer
- * (on top of 0.3); 0.3.0 needs inject_key + write_mem + capture_audio; 0.2.0
- * needs inject_key; else 0.1.0. Keeps a partial backend honest. */
-#define RETRO_CONTROL_CONTRACT "0.4.0"
+ * whose backend callbacks are all present: 0.5.0 needs set_pad + get_pad (on
+ * top of 0.4); 0.4.0 needs set_pointer + get_pointer (on top of 0.3); 0.3.0
+ * needs inject_key + write_mem + capture_audio; 0.2.0 needs inject_key; else
+ * 0.1.0. Keeps a partial backend honest. */
+#define RETRO_CONTROL_CONTRACT "0.5.0"
 
 /* Native framebuffer pixel layout; the server swizzles to PPM RGB. */
 typedef enum {
@@ -113,6 +114,36 @@ typedef struct retro_control_backend {
      * semantics as set_pointer's `buttons`). Return 1 on success (values
      * written), 0 if no pointer is available. NULL => GET /pointer returns 501. */
     int (*get_pointer)(int32_t *x, int32_t *y, int *buttons);
+
+    /* 0.5: present a virtual game controller at `index` and set what is held.
+     *
+     * `buttons` is the canonical mask (SPEC "Canonical button layout"): bit0
+     * LEFT, 1 RIGHT, 2 UP, 3 DOWN, 4 A, 5 B, 6 X, 7 Y, 8 START, 9 SELECT,
+     * 10 L, 11 R -- the SNES/Neo6502 native order. A backend whose hardware
+     * disagrees converts here, so a test never learns which machine it is on.
+     * -1 leaves the mask unchanged.
+     *
+     * `connected` is 1 to present the pad, 0 to unplug it, -1 to leave the
+     * presence unchanged. Unplugging is testable behaviour in its own right:
+     * a program that asks "is a pad there" before offering two-player needs
+     * both answers.
+     *
+     * A pad is a LEVEL, not an event -- the state persists across frames until
+     * changed, unlike inject_key's TAP.
+     *
+     * MUST drive the same path a real pad takes. On an emulator reading SDL
+     * joysticks that means presenting a virtual device the existing read path
+     * picks up, NOT calling into SDL: headless CI has no joystick, which is
+     * the case this exists for.
+     *
+     * Return 1 on success, 0 if the platform has no controller support
+     * (server -> 400). NULL => POST /pad returns 501. */
+    int (*set_pad)(int index, int buttons, int connected);
+
+    /* 0.5: report a pad's presence and held mask (same layout as set_pad).
+     * Return 1 on success (values written), 0 if unsupported. NULL => GET /pad
+     * returns 501. */
+    int (*get_pad)(int index, int *buttons, int *connected);
 } retro_control_backend_t;
 
 /* Start the server thread bound to 127.0.0.1:port. Non-blocking; 0 on success,

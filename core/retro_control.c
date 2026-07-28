@@ -52,7 +52,8 @@ static int  g_step_waiting  = 0;
 
 /* single-slot marshalled request. */
 typedef enum { REQ_NONE = 0, REQ_MEM, REQ_REGS, REQ_SHOT, REQ_KEY, REQ_RESET,
-               REQ_WRITE, REQ_AUDIO, REQ_PTR_SET, REQ_PTR_GET } req_t;
+               REQ_WRITE, REQ_AUDIO, REQ_PTR_SET, REQ_PTR_GET,
+               REQ_PAD_SET, REQ_PAD_GET } req_t;
 static volatile req_t g_req = REQ_NONE;
 static uint32_t g_req_addr, g_req_len;
 static int32_t  g_req_bank;
@@ -63,6 +64,9 @@ static int      g_key_action;    /* retro_key_action_t */
 static int      g_ptr_absolute;  /* 1 => (x,y) absolute; 0 => relative deltas */
 static int32_t  g_ptr_x, g_ptr_y;
 static int      g_ptr_buttons;   /* button bitmask, or -1 = leave unchanged */
+static int      g_pad_index;     /* which pad (0-based) */
+static int      g_pad_buttons;   /* held mask, or -1 = leave unchanged */
+static int      g_pad_connected; /* 1 plug, 0 unplug, -1 = unchanged */
 static char     g_resp_extra[64];     /* extra response header line, or "" */
 
 static uint8_t    *g_resp_body  = NULL;
@@ -268,6 +272,49 @@ void retro_control_service(void)
         g_resp_ctype = "application/json";
         break;
     }
+    case REQ_PAD_SET: {
+        const char *json;
+        if (!g_be->set_pad) {
+            json = "{\"error\":\"not implemented\"}"; g_resp_status = 501;
+        } else if (g_be->set_pad(g_pad_index, g_pad_buttons, g_pad_connected)) {
+            json = "{\"injected\":true}"; g_resp_status = 200;
+        } else {
+            json = "{\"error\":\"no controller\"}"; g_resp_status = 400;
+        }
+        size_t l = strlen(json);
+        uint8_t *b = (uint8_t *)malloc(l + 1);
+        if (b) memcpy(b, json, l + 1);
+        g_resp_body = b; g_resp_len = b ? l : 0;
+        g_resp_ctype = "application/json";
+        break;
+    }
+    case REQ_PAD_GET: {
+        char *b;
+        if (!g_be->get_pad) {
+            const char *json = "{\"error\":\"not implemented\"}";
+            size_t l = strlen(json); b = (char *)malloc(l + 1);
+            if (b) memcpy(b, json, l + 1);
+            g_resp_len = b ? l : 0; g_resp_status = 501;
+        } else {
+            int buttons = 0, connected = 0;
+            int ok = g_be->get_pad(g_pad_index, &buttons, &connected);
+            b = (char *)malloc(96);
+            if (!b) { g_resp_len = 0; g_resp_status = 500; }
+            else if (ok) {
+                g_resp_len = (size_t)snprintf(b, 96,
+                    "{\"index\":%d,\"connected\":%s,\"buttons\":%d}",
+                    g_pad_index, connected ? "true" : "false", buttons);
+                g_resp_status = 200;
+            } else {
+                g_resp_len = (size_t)snprintf(b, 96,
+                    "{\"error\":\"no controller\"}");
+                g_resp_status = 400;
+            }
+        }
+        g_resp_body = (uint8_t *)b;
+        g_resp_ctype = "application/json";
+        break;
+    }
     default: break;
     }
     g_req = REQ_NONE;
@@ -398,6 +445,9 @@ static void do_status(int fd)
     unsigned long long fc = g_be->get_frame_count ? g_be->get_frame_count() : 0;
     /* Advertise the highest level whose defining callbacks are all present. */
     const char *contract =
+        (g_be->inject_key && g_be->write_mem && g_be->capture_audio &&
+         g_be->set_pointer && g_be->get_pointer &&
+         g_be->set_pad && g_be->get_pad) ? "0.5.0" :
         (g_be->inject_key && g_be->write_mem && g_be->capture_audio &&
          g_be->set_pointer && g_be->get_pointer) ? "0.4.0" :
         (g_be->inject_key && g_be->write_mem && g_be->capture_audio) ? "0.3.0" :
@@ -566,6 +616,21 @@ static void handle_conn(int fd)
             do_marshalled(fd, REQ_PTR_SET);
         } else {                              /* 0.4: read back the pointer */
             do_marshalled(fd, REQ_PTR_GET);
+        }
+        return;
+    }
+    if (!strcmp(target, "/pad")) {
+        g_pad_index = (int)query_long(query, "index", 0);
+        if (is_post) {                        /* 0.5: present / set a pad */
+            g_pad_buttons = (int)query_long(query, "buttons", -1);
+            /* `connected` defaults to plugging it in whenever buttons were
+             * given -- injecting a press on an absent pad is never what the
+             * caller meant -- and to leaving it alone otherwise. */
+            g_pad_connected = (int)query_long(query, "connected",
+                                              g_pad_buttons >= 0 ? 1 : -1);
+            do_marshalled(fd, REQ_PAD_SET);
+        } else {                              /* 0.5: read a pad back */
+            do_marshalled(fd, REQ_PAD_GET);
         }
         return;
     }

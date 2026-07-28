@@ -19,8 +19,10 @@ An emulator launched with a control-port flag exposes a localhost HTTP server:
 | `GET /audio` | drain synthesised PCM as a WAV | 0.3 |
 | `POST /pointer?x=&y=&buttons=` | inject a pointer move/click | 0.4 |
 | `GET /pointer` | read back pointer position + buttons | 0.4 |
+| `POST /pad?index=&buttons=&connected=` | present a virtual controller, set what is held | 0.5 |
+| `GET /pad?index=` | read back a pad's presence + held buttons | 0.5 |
 
-Current contract: **0.4.0**. Minors are purely additive (a missing capability
+Current contract: **0.5.0**. Minors are purely additive (a missing capability
 returns 501 and lowers the advertised contract), so a client reads
 `/status.contract` and fails fast only on a MAJOR mismatch. See [SPEC.md](SPEC.md).
 
@@ -73,7 +75,8 @@ The vendor path is one backend struct plus three hooks:
 #include "retro_control.h"
 
 /* Four callbacks satisfy 0.1; add inject_key/reset for 0.2,
-   write_mem/capture_audio for 0.3, set_pointer/get_pointer for 0.4.
+   write_mem/capture_audio for 0.3, set_pointer/get_pointer for 0.4,
+   set_pad/get_pad for 0.5.
    A NULL callback 501s its endpoint. */
 static const retro_control_backend_t backend = {
     .platform        = "x16",
@@ -87,6 +90,7 @@ static const retro_control_backend_t backend = {
     .write_mem       = x16_write_mem,        /* 0.3 */
     .capture_audio   = x16_capture_audio,    /* 0.3 */
     .set_pointer     = x16_set_pointer,      /* 0.4 */
+    .set_pad         = x16_set_pad,          /* 0.5 */
     .get_pointer     = x16_get_pointer,      /* 0.4 */
 };
 
