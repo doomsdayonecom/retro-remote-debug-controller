@@ -281,8 +281,15 @@ def test_pad_unplug_is_observable(emu):
         pytest.skip("contract < 0.5")
     emu.pause()
     try:
-        emu.pad(buttons=0)                     # plugged in
-        assert emu.pad_get()["connected"] is True
+        emu.pad(connected=False)
+        if emu.pad_get()["connected"]:
+            pytest.skip(
+                "a physical controller is present at index 0, so `connected` "
+                "cannot go false — the SPEC says it reports anything present, "
+                "real or virtual. Re-run with the controller unplugged.")
+        emu.pad(buttons=0)                     # plugging in is what we assert
+        assert emu.pad_get()["connected"] is True, (
+            "injecting did not make the pad present")
         emu.pad(connected=False)
         assert emu.pad_get()["connected"] is False, (
             "the pad still reports connected after connected=0")
