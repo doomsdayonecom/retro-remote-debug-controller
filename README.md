@@ -110,9 +110,21 @@ if (frame_completed) retro_control_on_frame();   /* tick the /step budget */
 
 ## Status
 
-Contract **0.4.0**, implemented across **four** emulators. The shared server and
-the conformance suite (18 tests) are complete; the three 0.4 pointer tests are
-exercised by the Neo6502 fork (the first 0.4 consumer) and skip on servers still
-at 0.3. Reference implementation: the Commander X16 fork (`x16-emulator`), which
-vendors `core/` as a git submodule; the NEC PC-FX fork (Mednafen) does the same,
-and the FAB Agon emulator conforms directly in Rust.
+Contract **0.5.0**, implemented across **four** emulators. The shared server and
+the conformance suite (22 tests) are complete; tests gated *above* the server's
+advertised level skip, so a 0.1-only backend still passes.
+
+Reference implementation: the Commander X16 fork (`x16-emulator`), which vendors
+`core/` as a git submodule; the NEC PC-FX fork (Mednafen) does the same, and the
+FAB Agon emulator conforms directly in Rust.
+
+> **Known gap — cumulative levels vs. absent devices.** A level is advertised
+> only when *all* its callbacks are present, so a platform that lacks a device
+> cannot advertise past it without supplying a stub. The PC-FX has no pointing
+> device: it stubs `/pointer` to 400 in order to advertise **0.5.0** for the
+> `/pad` support it genuinely has — but the suite gates the pointer tests on
+> `minor >= 4`, so they then *run* and fail. Measured against the PC-FX fork:
+> **19 passed, 3 failed**, the three being pointer tests. A single cumulative
+> integer cannot express "has pad, has no pointer"; this needs either a
+> per-capability declaration in `/status` or a conformance rule that treats a
+> documented "no such device" 400 as a skip.
