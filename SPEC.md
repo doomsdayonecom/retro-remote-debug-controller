@@ -1,11 +1,12 @@
 # Retro Remote Debug Controller — HTTP Control Contract
 
-**Contract version: 0.4.0** (semver; clients assert on the MAJOR). 0.4 adds
-pointer injection (`POST /pointer`, `GET /pointer`); 0.3 added memory write
-(`POST /mem`) and an audio drain (`GET /audio`); 0.2 added input injection
-(`POST /key`, `POST /reset`). Every minor is purely additive, so older clients
-keep working and servers advertise the highest level whose callbacks are all
-present via `/status.contract`.
+**Contract version: 0.5.0** (semver; clients assert on the MAJOR). 0.5 adds a
+virtual game controller (`POST /pad`, `GET /pad`); 0.4 added pointer injection
+(`POST /pointer`, `GET /pointer`); 0.3 added memory write (`POST /mem`) and an
+audio drain (`GET /audio`); 0.2 added input injection (`POST /key`,
+`POST /reset`). Every minor is purely additive, so older clients keep working and
+servers advertise the highest level whose callbacks are all present via
+`/status.contract`.
 
 A minimal, portable HTTP API that a retro-platform emulator exposes so an
 external harness can screenshot the screen, read memory and registers, step the
@@ -45,7 +46,7 @@ drives all four ports.
 Liveness + contract negotiation. Always available.
 ```json
 {
-  "contract": "0.4.0",
+  "contract": "0.5.0",
   "emulator": "x16emu",
   "platform": "x16",
   "frame": 12345,
@@ -266,9 +267,10 @@ rather than a snapshot.
   mixed `audio_render()` output.
 - Pointer: `/pointer` maps to the KERNAL/VERA mouse — absolute/relative position
   and buttons fed through the same path the host mouse uses, so `MOUSE_GET`
-  (and VERA sprite 0) see it. Coordinates are screen pixels. (Backend
-  callbacks not yet wired — until then the X16 fork advertises 0.3.0 and
-  `/pointer` returns 501.)
+  (and VERA sprite 0) see it. Coordinates are screen pixels.
+- Pad: `/pad` presents a virtual controller through the emulator's own joystick
+  read path. The fork implements the full 0.5 callback set and advertises
+  **0.5.0**.
 
 ### Neo6502 — neo6502 emulator
 - Flag: `--control-port <N>`.
@@ -339,6 +341,19 @@ rather than a snapshot.
   `1`–`6` = buttons I–VI. A held button is re-asserted each frame (the frontend
   rewrites the pad from physical input every frame), so holds persist across
   `/step`. `/reset` power-cycles the machine.
+- Pad: `/pad` remaps the canonical mask to the FX pad word (`I=0 II=1 III=2 IV=3
+  V=4 VI=5 SELECT=6 RUN=7 UP=8 RIGHT=9 DOWN=10 LEFT=11`; A/B → I/II, X/Y →
+  III/IV, L/R → V/VI, START → RUN) and OR-merges it into the pad read every
+  frame, as a level. **Trap:** that layout is implicit in the *order* of
+  Mednafen's `PCFX_GamepadIDII` array — the third `IDIIS_Button` argument is
+  `ConfigOrder`, not a bit offset. Using those numbers as bits binds every button
+  wrongly and is a defect currently present in the fork.
+- Pointer: the PC-FX has no pointing device. Because 0.5.0 advertises
+  cumulatively, the fork supplies refusing stubs (`/pointer` → **400**) rather
+  than NULL callbacks, so it can honestly advertise **0.5.0** for `/pad`.
+- Audio: `/audio` is fed by the mixer, which only runs when sound is enabled.
+  Launching with `-sound 0` yields a valid but **header-only (44-byte)** WAV, not
+  an error — use `-sound 1 -sound.driver dummy` for headless audio capture.
 
 ---
 
@@ -349,9 +364,11 @@ is required. Two ways to get there:
 
 - **Vendor the shared core** (`core/retro_control.c` + `.h`) — for C/C++
   emulators. Implement the backend callbacks (four are enough for 0.1; add
-  `inject_key`/`reset` for 0.2, `write_mem`/`capture_audio` for 0.3, and
-  `set_pointer`/`get_pointer` for 0.4 — a NULL callback makes its endpoint return
-  501 and lowers the advertised contract), wire three loop hooks, call
+  `inject_key`/`reset` for 0.2, `write_mem`/`capture_audio` for 0.3,
+  `set_pointer`/`get_pointer` for 0.4, and `set_pad`/`get_pad` for 0.5 — a NULL
+  callback makes its endpoint return 501 and lowers the advertised contract, so a
+  platform lacking a device should supply a stub that returns 400 instead), wire
+  three loop hooks, call
   `retro_control_start(port, &backend)`; the socket loop, HTTP parsing, PPM/JSON
   encoding and pause/step control come for free. The Commander X16 fork does
   this.
